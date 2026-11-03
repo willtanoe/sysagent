@@ -92,7 +92,7 @@ const NEEDS_APPROVAL: Rule[] = [
   { pattern: /\btee\s+\/(etc|boot|usr|bin|sbin|lib)\//, reason: "menulis ke direktori sistem" },
   { pattern: /\bgit\s+(reset\s+--hard|clean\s+-[A-Za-z]*f|push\s+(--force|-f))\b/, reason: "operasi git destruktif" },
   { pattern: /\bprintenv\b/, reason: "menampilkan environment proses" },
-  { pattern: /\bsystemctl\s+(cat|show)\s+aster-sys/, reason: "membaca konfigurasi service agent" },
+  { pattern: /\bsystemctl\s+(cat|show)\s+aster-(?:sys|node|hub)/, reason: "membaca konfigurasi service agent" },
   { pattern: /\$\(|`/, reason: "command substitution dinamis (tidak bisa dinilai statis)" },
   { pattern: /\b(bash|sh|zsh|dash|ksh)\s+-c\b/, reason: "eksekusi string shell" },
   {

@@ -1,16 +1,57 @@
 import * as crypto from "crypto";
 import * as fs from "fs";
+import * as path from "path";
 
 export interface AuditEntry {
   ts: string;
   nodeId: string;
   command: string;
-  exitCode: number;
+  exitCode: number | null;
   durationMs: number;
   risk: string;
   approved: boolean;
+  timedOut?: boolean;
+  outputPreview?: string;
+  chatId?: number;
+  userId?: number;
   prevHash: string;
   hash: string;
+}
+
+export interface AuditVerifyResult {
+  ok: boolean;
+  total: number;
+  brokenAt?: number;
+  reason?: string;
+}
+
+/** Redaksi pola password, token, atau secret sensitif agar tidak bocor di audit trail plaintext. */
+export function redactSecrets(text: string): string {
+  if (!text) return text;
+  return text
+    .replace(/(?:printf|echo)\s+(['"])[^\n]*?\1\s*([;|]\s*sudo)/gi, "printf '[REDACTED]' $2")
+    .replace(/sudo\s+-S\s+-p\s+(['"])[^\n]*?\1/gi, "sudo -S -p '[REDACTED]'")
+    .replace(/(?:password|passwd|token|secret|api[_-]?key|hub[_-]?token)=([^\s&;'"]+)/gi, "$1=[REDACTED]")
+    .replace(/(?:--password|--token|-p)\s+(['"]?)[^\s'"]+\1/gi, "--password [REDACTED]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]");
+}
+
+function computeEntryHash(entryWithoutHash: Omit<AuditEntry, "hash">): string {
+  const payload = [
+    entryWithoutHash.ts,
+    entryWithoutHash.nodeId,
+    entryWithoutHash.command,
+    String(entryWithoutHash.exitCode ?? ""),
+    String(entryWithoutHash.durationMs),
+    entryWithoutHash.risk,
+    String(entryWithoutHash.approved),
+    String(entryWithoutHash.timedOut ?? false),
+    entryWithoutHash.outputPreview ?? "",
+    String(entryWithoutHash.chatId ?? ""),
+    String(entryWithoutHash.userId ?? ""),
+    entryWithoutHash.prevHash,
+  ].join("|");
+  return crypto.createHash("sha256").update(payload).digest("hex");
 }
 
 export class AuditLogger {
@@ -23,46 +64,139 @@ export class AuditLogger {
   }
 
   private init(): void {
-    if (!fs.existsSync(this.logPath)) return;
     try {
+      const dir = path.dirname(path.resolve(this.logPath));
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      }
+      if (!fs.existsSync(this.logPath)) {
+        return;
+      }
+      try {
+        fs.chmodSync(this.logPath, 0o600);
+      } catch {
+        // abaikan jika filesystem tidak mendukung chmod
+      }
       const lines = fs.readFileSync(this.logPath, "utf8").trim().split("\n");
-      if (lines.length > 0 && lines[lines.length - 1].trim()) {
-        const last = JSON.parse(lines[lines.length - 1]) as AuditEntry;
-        if (last && last.hash) {
-          this.lastHash = last.hash;
+      for (let i = lines.length - 1; i >= 0; i--) {
+        const line = lines[i]?.trim();
+        if (!line) continue;
+        try {
+          const parsed = JSON.parse(line) as Partial<AuditEntry>;
+          if (typeof parsed.hash === "string" && parsed.hash.length > 0) {
+            this.lastHash = parsed.hash;
+            break;
+          }
+        } catch {
+          // lewati baris rusak saat inisialisasi
         }
       }
     } catch {
-      // jika file baru/kosong
+      // file belum ada atau tidak dapat diakses
     }
   }
 
   log(data: {
     nodeId: string;
     command: string;
-    exitCode: number;
+    exitCode: number | null;
     durationMs: number;
     risk: string;
     approved: boolean;
+    timedOut?: boolean;
+    outputPreview?: string;
+    chatId?: number;
+    userId?: number;
   }): AuditEntry {
-    const ts = new Date().toISOString();
-    const payload = `${ts}|${data.nodeId}|${data.command}|${data.exitCode}|${data.durationMs}|${data.risk}|${data.approved}|${this.lastHash}`;
-    const hash = crypto.createHash("sha256").update(payload).digest("hex");
+    // Sinkronkan ulang lastHash dari disk bila ada proses lain yang menulis
+    this.init();
 
-    const entry: AuditEntry = {
+    const ts = new Date().toISOString();
+    const safeCommand = redactSecrets(data.command);
+    const safePreview = data.outputPreview ? redactSecrets(data.outputPreview.slice(0, 500)) : undefined;
+
+    const baseEntry: Omit<AuditEntry, "hash"> = {
       ts,
       nodeId: data.nodeId,
-      command: data.command,
+      command: safeCommand,
       exitCode: data.exitCode,
       durationMs: data.durationMs,
       risk: data.risk,
       approved: data.approved,
+      ...(data.timedOut !== undefined ? { timedOut: data.timedOut } : {}),
+      ...(safePreview !== undefined ? { outputPreview: safePreview } : {}),
+      ...(data.chatId !== undefined ? { chatId: data.chatId } : {}),
+      ...(data.userId !== undefined ? { userId: data.userId } : {}),
       prevHash: this.lastHash,
-      hash,
     };
 
+    const hash = computeEntryHash(baseEntry);
+    const entry: AuditEntry = { ...baseEntry, hash };
+
     this.lastHash = hash;
-    fs.appendFileSync(this.logPath, JSON.stringify(entry) + "\n", "utf8");
+    try {
+      fs.appendFileSync(this.logPath, JSON.stringify(entry) + "\n", { encoding: "utf8", mode: 0o600 });
+      try {
+        fs.chmodSync(this.logPath, 0o600);
+      } catch {
+        // abaikan
+      }
+    } catch (err: any) {
+      console.error(`[audit:${data.nodeId}] Gagal menulis audit log:`, err.message);
+    }
     return entry;
+  }
+
+  verify(): AuditVerifyResult {
+    if (!fs.existsSync(this.logPath)) {
+      return { ok: true, total: 0 };
+    }
+
+    let raw = "";
+    try {
+      raw = fs.readFileSync(this.logPath, "utf8");
+    } catch (err: any) {
+      return { ok: false, total: 0, reason: `gagal membaca file: ${err.message}` };
+    }
+
+    const lines = raw.trim().split("\n").filter(Boolean);
+    let expectedPrev = "GENESIS";
+
+    for (let i = 0; i < lines.length; i++) {
+      let parsed: AuditEntry;
+      try {
+        parsed = JSON.parse(lines[i]!) as AuditEntry;
+      } catch {
+        return { ok: false, total: lines.length, brokenAt: i + 1, reason: "baris bukan JSON valid" };
+      }
+
+      if (parsed.prevHash !== expectedPrev) {
+        return {
+          ok: false,
+          total: lines.length,
+          brokenAt: i + 1,
+          reason: `prevHash tidak cocok (ekspektasi ${expectedPrev.slice(0, 12)}..., dapat ${String(parsed.prevHash).slice(0, 12)}...)`,
+        };
+      }
+
+      const { hash, ...rest } = parsed;
+      const expectedHash = computeEntryHash(rest);
+      if (hash !== expectedHash) {
+        return {
+          ok: false,
+          total: lines.length,
+          brokenAt: i + 1,
+          reason: "hash SHA-256 tidak cocok (data baris telah diubah)",
+        };
+      }
+
+      expectedPrev = hash;
+    }
+
+    return { ok: true, total: lines.length };
+  }
+
+  getLogPath(): string {
+    return this.logPath;
   }
 }

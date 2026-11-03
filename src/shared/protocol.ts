@@ -1,3 +1,10 @@
+export interface NodeDistroInfo {
+  id: string;
+  name: string;
+  version: string;
+  packageManager: string;
+}
+
 export interface NodeInfo {
   hostname: string;
   platform: string;
@@ -8,6 +15,21 @@ export interface NodeInfo {
     totalMb: number;
     freeMb: number;
   };
+  distro?: NodeDistroInfo;
+  kernel?: string;
+  cpus?: number;
+  diskPct?: number;
+  isRoot?: boolean;
+}
+
+export interface ChatHistoryItem {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface TokenUsage {
+  promptTokens: number;
+  completionTokens: number;
 }
 
 // Node -> Hub
@@ -27,6 +49,7 @@ export interface NodeHeartbeatMsg {
     totalMb: number;
     freeMb: number;
   };
+  diskPct?: number;
 }
 
 export interface NodeRunChunkMsg {
@@ -48,6 +71,15 @@ export interface NodeRunDoneMsg {
   runId: string;
   fullText: string;
   error?: string;
+  usage?: TokenUsage;
+}
+
+export interface NodeAlertMsg {
+  type: "node_alert";
+  nodeId: string;
+  key: string;
+  severity: "warn" | "ok";
+  html: string;
 }
 
 export interface NodePongMsg {
@@ -61,6 +93,7 @@ export type NodeToHubMsg =
   | NodeRunChunkMsg
   | NodeApprovalReqMsg
   | NodeRunDoneMsg
+  | NodeAlertMsg
   | NodePongMsg;
 
 // Hub -> Node
@@ -74,8 +107,10 @@ export interface HubRunPromptMsg {
   type: "hub_run";
   runId: string;
   chatId: number;
+  userId?: number;
   prompt: string;
   model?: string;
+  history?: ChatHistoryItem[];
 }
 
 export interface HubApprovalResMsg {
