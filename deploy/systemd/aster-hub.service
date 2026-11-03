@@ -1,0 +1,43 @@
+[Unit]
+Description=Aster Fleet Hub Coordinator & Telegram Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aster
+Group=aster
+WorkingDirectory=/opt/aster-fleet
+EnvironmentFile=/opt/aster-fleet/.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=HUB_STATE_FILE=/var/lib/aster-hub/hub-state.json
+ExecStart=/usr/bin/env node /opt/aster-fleet/dist/hub/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aster-hub
+
+# --- Hardening Ketat (Hub tidak pernah menjalankan shell lokal) ---
+UMask=0077
+StateDirectory=aster-hub
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/aster-hub
+ReadOnlyPaths=/opt/aster-fleet
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RemoveIPC=yes
+TasksMax=512
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

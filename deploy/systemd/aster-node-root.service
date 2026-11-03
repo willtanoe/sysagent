@@ -1,0 +1,34 @@
+[Unit]
+Description=Aster Fleet Node Agent (root)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/aster-fleet
+EnvironmentFile=/opt/aster-fleet/.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /opt/aster-fleet/dist/node/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aster-node
+
+# --- Hardening Mode Root ---
+UMask=0077
+StateDirectory=aster-node
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/aster-node
+# Agent tidak dapat menulis ulang binary/kode dirinya sendiri
+ReadOnlyPaths=/opt/aster-fleet
+NoNewPrivileges=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RemoveIPC=yes
+TasksMax=4096
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

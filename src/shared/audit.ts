@@ -31,7 +31,7 @@ export function redactSecrets(text: string): string {
   return text
     .replace(/(?:printf|echo)\s+(['"])[^\n]*?\1\s*([;|]\s*sudo)/gi, "printf '[REDACTED]' $2")
     .replace(/sudo\s+-S\s+-p\s+(['"])[^\n]*?\1/gi, "sudo -S -p '[REDACTED]'")
-    .replace(/(?:password|passwd|token|secret|api[_-]?key|hub[_-]?token)=([^\s&;'"]+)/gi, "$1=[REDACTED]")
+    .replace(/\b(password|passwd|token|secret|api[_-]?key|hub[_-]?token)=([^\s&;'"]+)/gi, "$1=[REDACTED]")
     .replace(/(?:--password|--token|-p)\s+(['"]?)[^\s'"]+\1/gi, "--password [REDACTED]")
     .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [REDACTED]");
 }

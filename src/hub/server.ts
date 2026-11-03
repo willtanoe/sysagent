@@ -356,8 +356,10 @@ export class HubServer extends EventEmitter {
         runId,
       };
       node.ws.send(JSON.stringify(msg));
+    } else {
+      run.onDone("[dibatalkan]", "ABORTED");
+      this.runs.delete(runId);
     }
-    this.runs.delete(runId);
     return true;
   }
 

@@ -1,0 +1,37 @@
+[Unit]
+Description=Aster Fleet Node Agent (isolated, /agent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aster
+Group=aster
+WorkingDirectory=/agent/aster-fleet
+EnvironmentFile=/agent/aster-fleet/.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/env node /agent/aster-fleet/dist/node/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aster-node
+
+# --- Hardening Terisolasi (Server Aplikasi Web) ---
+UMask=0077
+StateDirectory=aster-node
+StateDirectoryMode=0700
+ReadWritePaths=/var/lib/aster-node
+ReadOnlyPaths=/agent/aster-fleet
+# Sembunyikan /home dan direktori aplikasi web dari pandangan agent
+ProtectHome=true
+InaccessiblePaths=-/var/www -/srv
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+RemoveIPC=yes
+TasksMax=4096
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target
