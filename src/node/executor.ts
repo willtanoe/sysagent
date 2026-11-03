@@ -1,31 +1,237 @@
-import { exec } from "child_process";
+import { spawn } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { assessRisk, Verdict } from "../shared/risk";
-import { AuditLogger } from "../shared/audit";
+import { AuditLogger, AuditVerifyResult } from "../shared/audit";
+
+const MAX_BUFFER = 8 * 1024 * 1024;
+const MAX_MODEL_OUTPUT = 12_000;
+const PACKAGE_COMMAND = /\b(apt|apt-get|dpkg|dnf|yum|pacman|apk|snap|zypper|rpm|add-apt-repository)\b/;
+const SUDO_CALL = /(^|[\n;&|(]\s*)sudo(?!\s+-[An])/gm;
+
+export const isRoot: boolean = typeof process.getuid === "function" && process.getuid() === 0;
 
 export interface ExecResult {
   output: string;
   exitCode: number;
   durationMs: number;
+  timedOut?: boolean;
+  aborted?: boolean;
   blocked?: boolean;
   rejected?: boolean;
   reason?: string;
 }
 
+export interface ExecutorOptions {
+  sudoPassword?: string;
+  shellTimeoutMs?: number;
+  packageTimeoutMs?: number;
+  maxCommandsPerMinute?: number;
+}
+
 export type RequestApprovalFn = (command: string, reason: string) => Promise<boolean>;
+
+function singleQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Hapus variabel sensitif dari env yang diteruskan ke child process shell. */
+export function sanitizeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const result: NodeJS.ProcessEnv = { ...source };
+  const sensitive =
+    /(TOKEN|PASSWORD|PASSWD|SECRET|API|KEY|PRIVATE|CREDENTIAL|AUTH|JWT|DSN|DATABASE_URL|ASKPASS)/i;
+  for (const key of Object.keys(result)) {
+    if (key === "SUDO_ASKPASS") continue;
+    if (sensitive.test(key)) delete result[key];
+  }
+  return result;
+}
+
+export function truncateForModel(output: string): string {
+  if (output.length <= MAX_MODEL_OUTPUT) return output;
+  const dropped = output.length - MAX_MODEL_OUTPUT;
+  return `${output.slice(0, MAX_MODEL_OUTPUT)}\n[...dipotong ${dropped} karakter]`;
+}
 
 export class NodeExecutor {
   private nodeId: string;
   private audit: AuditLogger;
+  private askpassPath: string | null = null;
+  private shellTimeoutMs: number;
+  private packageTimeoutMs: number;
+  private maxCommandsPerMinute: number;
+  private executionTimestamps: number[] = [];
 
-  constructor(nodeId: string, auditPath: string) {
+  constructor(nodeId: string, auditPath: string, opts?: ExecutorOptions) {
     this.nodeId = nodeId;
     this.audit = new AuditLogger(auditPath);
+    this.shellTimeoutMs = Math.min(opts?.shellTimeoutMs ?? 120_000, 1_800_000);
+    this.packageTimeoutMs = Math.min(opts?.packageTimeoutMs ?? 900_000, 1_800_000);
+    this.maxCommandsPerMinute = opts?.maxCommandsPerMinute ?? 30;
+
+    if (opts?.sudoPassword) {
+      this.initSudo(opts.sudoPassword);
+    }
+  }
+
+  initSudo(password: string): void {
+    if (isRoot) return;
+    if (!password) return;
+
+    try {
+      const dir = path.join(os.homedir(), ".config", "aster");
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.chmodSync(dir, 0o700);
+
+      const safeId = this.nodeId.replace(/[^A-Za-z0-9_-]/g, "_");
+      const file = path.join(dir, `askpass-${safeId}.sh`);
+      fs.writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' ${singleQuote(password)}\n`, { mode: 0o700 });
+      fs.chmodSync(file, 0o700);
+      this.askpassPath = file;
+    } catch (err: any) {
+      console.error(`[executor:${this.nodeId}] Gagal menyiapkan sudo askpass:`, err.message);
+    }
+  }
+
+  private prepareCommand(command: string): string {
+    const flag = this.askpassPath === null ? "sudo -n" : "sudo -A";
+    return command.replace(SUDO_CALL, (_match: string, prefix: string) => `${prefix}${flag}`);
+  }
+
+  timeoutFor(command: string): number {
+    return PACKAGE_COMMAND.test(command) ? this.packageTimeoutMs : this.shellTimeoutMs;
+  }
+
+  /** Eksekusi shell mentah dengan process-group kill & sanitasi env (dipakai internal & oleh runCommand). */
+  execRaw(command: string, timeoutMs?: number, signal?: AbortSignal): Promise<ExecResult> {
+    const effectiveTimeout = timeoutMs ?? this.timeoutFor(command);
+    const prepared = this.prepareCommand(command);
+
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      let settled = false;
+      let aborted = false;
+      let timedOut = false;
+      let timer: NodeJS.Timeout | null = null;
+      let onAbort: (() => void) | null = null;
+
+      const finish = (result: ExecResult): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimeout(timer);
+        if (onAbort !== null) signal?.removeEventListener("abort", onAbort);
+        resolve(result);
+      };
+
+      if (signal?.aborted) {
+        finish({
+          output: "[dibatalkan]",
+          exitCode: 130,
+          durationMs: 0,
+          timedOut: false,
+          aborted: true,
+        });
+        return;
+      }
+
+      const env: NodeJS.ProcessEnv = sanitizeEnv(process.env);
+      env.DEBIAN_FRONTEND = "noninteractive";
+      env.APT_LISTCHANGES_FRONTEND = "none";
+      env.NEEDRESTART_MODE = "a";
+      if (this.askpassPath !== null) {
+        env.SUDO_ASKPASS = this.askpassPath;
+        env.SUDO_ASKPASS_REQUIRE = "force";
+      }
+
+      const child = spawn("/bin/bash", ["-c", prepared], {
+        env,
+        detached: true,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let truncated = false;
+
+      const collect = (target: "out" | "err", chunk: Buffer): void => {
+        const text = chunk.toString("utf8");
+        if (target === "out") {
+          if (stdout.length < MAX_BUFFER) stdout += text;
+          else truncated = true;
+        } else if (stderr.length < MAX_BUFFER) {
+          stderr += text;
+        } else {
+          truncated = true;
+        }
+      };
+
+      child.stdout?.on("data", (chunk: Buffer) => collect("out", chunk));
+      child.stderr?.on("data", (chunk: Buffer) => collect("err", chunk));
+
+      const killTree = (): void => {
+        try {
+          if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+          else child.kill("SIGKILL");
+        } catch {
+          try {
+            child.kill("SIGKILL");
+          } catch {
+            // sudah berhenti
+          }
+        }
+      };
+
+      timer = setTimeout(() => {
+        timedOut = true;
+        killTree();
+      }, effectiveTimeout);
+
+      onAbort = (): void => {
+        aborted = true;
+        killTree();
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+
+      child.on("error", (err: Error) => {
+        finish({
+          output: `[error] ${err.message}`,
+          exitCode: 1,
+          durationMs: Date.now() - startedAt,
+          timedOut: false,
+          aborted,
+        });
+      });
+
+      child.on("close", (code) => {
+        let output = stdout;
+        if (stderr.trim() !== "") {
+          output += `${output.trim() ? "\n[stderr]\n" : ""}${stderr}`;
+        }
+
+        if (aborted) output += "\n[dibatalkan oleh operator]";
+        else if (timedOut) output += `\n[error] timeout setelah ${Math.round(effectiveTimeout / 1000)}s`;
+
+        if (truncated) output += "\n[output dipotong: melebihi batas buffer]";
+
+        const trimmed = output.trim();
+        finish({
+          output: trimmed === "" ? "(tidak ada output)" : trimmed,
+          exitCode: aborted ? 130 : timedOut ? 124 : (code ?? 0),
+          durationMs: Date.now() - startedAt,
+          timedOut,
+          aborted,
+        });
+      });
+    });
   }
 
   async runCommand(
     command: string,
     requestApproval?: RequestApprovalFn,
-    timeoutMs: number = 30_000
+    timeoutMs?: number,
+    signal?: AbortSignal,
+    meta?: { chatId?: number; userId?: number }
   ): Promise<ExecResult> {
     const verdict: Verdict = assessRisk(command);
 
@@ -37,6 +243,9 @@ export class NodeExecutor {
         durationMs: 0,
         risk: "block",
         approved: false,
+        outputPreview: verdict.reason,
+        chatId: meta?.chatId,
+        userId: meta?.userId,
       });
       return {
         output: `[BLOCKED] Perintah dilarang: ${verdict.reason}`,
@@ -67,6 +276,9 @@ export class NodeExecutor {
           durationMs: 0,
           risk: "approve",
           approved: false,
+          outputPreview: "Ditolak oleh operator",
+          chatId: meta?.chatId,
+          userId: meta?.userId,
         });
         return {
           output: `[REJECTED] Ditolak oleh operator.`,
@@ -78,28 +290,45 @@ export class NodeExecutor {
       }
     }
 
-    const start = Date.now();
-    return new Promise((resolve) => {
-      exec(command, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
-        const durationMs = Date.now() - start;
-        const out = stdout.trim() || stderr.trim() || "(tidak ada output)";
-        const exitCode = err?.code ?? (err ? 1 : 0);
+    // Rate limiting per menit
+    const now = Date.now();
+    while (this.executionTimestamps.length > 0 && now - (this.executionTimestamps[0] ?? 0) > 60_000) {
+      this.executionTimestamps.shift();
+    }
+    if (this.executionTimestamps.length >= this.maxCommandsPerMinute) {
+      return {
+        output: `[RATE LIMIT] Melebihi batas ${this.maxCommandsPerMinute} perintah per menit di node ${this.nodeId}.`,
+        exitCode: 129,
+        durationMs: 0,
+        rejected: true,
+        reason: "Rate limit tercapai",
+      };
+    }
+    this.executionTimestamps.push(now);
 
-        this.audit.log({
-          nodeId: this.nodeId,
-          command,
-          exitCode,
-          durationMs,
-          risk: verdict.level,
-          approved,
-        });
+    const res = await this.execRaw(command, timeoutMs, signal);
 
-        resolve({
-          output: out,
-          exitCode,
-          durationMs,
-        });
-      });
+    this.audit.log({
+      nodeId: this.nodeId,
+      command,
+      exitCode: res.exitCode,
+      durationMs: res.durationMs,
+      risk: verdict.level,
+      approved,
+      timedOut: res.timedOut,
+      outputPreview: res.output.slice(0, 500),
+      chatId: meta?.chatId,
+      userId: meta?.userId,
     });
+
+    return res;
+  }
+
+  verifyAudit(): AuditVerifyResult {
+    return this.audit.verify();
+  }
+
+  getAuditPath(): string {
+    return this.audit.getLogPath();
   }
 }
