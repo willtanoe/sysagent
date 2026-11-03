@@ -29,6 +29,7 @@ export const HUB_BOT_COMMANDS = [
   { command: "svc", description: "Kontrol service: /svc <aksi> <unit>" },
   { command: "exec", description: "Jalankan shell langsung: /exec <perintah>" },
   { command: "chat", description: "Konsultasi & operasi AI: /chat <prompt>" },
+  { command: "ecc", description: "Katalog & workflow ECC: /ecc [skills|agents|commands|<workflow>]" },
   { command: "stop", description: "Hentikan eksekusi yang sedang berjalan" },
   { command: "auditcheck", description: "Verifikasi rantai hash audit log di node" },
   { command: "model", description: "Lihat atau ganti model AI: /model [id|reset]" },
@@ -469,6 +470,33 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       return;
     }
     await executeOnNode(ctx, target, prompt, { rememberInHistory: true });
+  });
+
+  bot.command("ecc", async (ctx) => {
+    const target = await requireActiveNode(ctx);
+    if (!target) return;
+
+    const rawArgs = (ctx.match ?? "").trim();
+    if (!rawArgs) {
+      await executeOnNode(ctx, target, "__builtin:ecc:status");
+      return;
+    }
+
+    const parts = rawArgs.split(/\s+/);
+    const sub = parts[0]!.toLowerCase();
+    const rest = parts.slice(1).join(" ").trim();
+
+    if (["status", "info", "skills", "agents", "commands"].includes(sub) && !rest) {
+      await executeOnNode(ctx, target, `__builtin:ecc:${sub}`);
+      return;
+    }
+
+    if (!rest && !["verify", "security", "security-scan", "code-review", "harness-audit", "pm2"].includes(sub)) {
+      await executeOnNode(ctx, target, `__builtin:ecc:${sub}`);
+      return;
+    }
+
+    await executeOnNode(ctx, target, `ecc:${sub} ${rest}`.trim(), { rememberInHistory: true });
   });
 
   bot.command("stop", async (ctx) => {

@@ -35,9 +35,9 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 
 ### Keunggulan Utama
 1. **Zero Inbound Port di Server Target**: Seluruh node menginisiasi koneksi *outbound* WebSocket (`ws://` atau `wss://`) ke Hub. Firewall server produksi kantor tidak perlu membuka port *inbound* tambahan.
-2. **Bundled OpenCode Engine (`@opencode/cli`) & Dual-Engine AI**:
-   - **`ENGINE=opencode` (Default)**: Membundel binary resmi `@opencode/cli` langsung di dalam paket (`node_modules/@opencode/cli`) dan otomatis menyalakan daemon `opencode serve` lokal (`127.0.0.1`) yang diproteksi password acak per sesi. Mendukung model gratis bawaan (`opencode/glm-5.3-flash-free`, `opencode/minimax-m2.5-free`, dll.) tanpa perlu API key eksternal.
-   - **`ENGINE=local`**: Mode alternatif menggunakan loop *tool-calling* internal dengan endpoint yang kompatibel dengan OpenAI API (`GATEWAY_URL` + `GATEWAY_API_KEY`).
+2. **Bundled OpenCode Engine (`@opencode/cli`) + Integrasi ECC ([Everything Claude Code](https://github.com/affaan-m/ECC))**:
+   - **`ENGINE=opencode` (Default)**: Membundel binary resmi `@opencode/cli` langsung di dalam paket (`node_modules/@opencode/cli`) dan otomatis menyalakan daemon `opencode serve` lokal (`127.0.0.1`) yang diproteksi password acak per sesi serta diprovisi otomatis dengan konfigurasi `.opencode/opencode.json` milik **ECC** (31 *curated SRE & security skills*, 27 *specialist agents*, 36 *workflow commands*, dan *plugin hooks* yang telah di-*harden*). Mendukung model gratis bawaan (`opencode/glm-5.3-flash-free`, `opencode/minimax-m2.5-free`, dll.) tanpa perlu API key eksternal.
+   - **`ENGINE=local` + Trigger-Table Lazy Loading ECC**: Mode alternatif menggunakan loop *tool-calling* internal (`GATEWAY_URL` + `GATEWAY_API_KEY`) yang juga diperkaya oleh pencocokan *Trigger-Table* ECC (`src/node/ecc.ts`) untuk menyuntikkan panduan skill & agen spesialis secara hemat token.
 3. **Defense-in-Depth & Hardening**:
    - Verifikasi token *constant-time* (`crypto.timingSafeEqual` di atas SHA-256 digest) dengan dukungan token master maupun token unik per-node (`NODE_TOKENS`).
    - Sanitasi *environment* (`sanitizeEnv`) sehingga *child process* shell tidak dapat membocorkan token/kredensial dari variabel *environment*.
@@ -71,15 +71,20 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 │       ├── client.ts          # Outbound WS/WSS client, heartbeat, reconnect, abort handler
 │       ├── engine.ts          # Dual-engine router (opencode / local), permission guard, & RPC
 │       ├── opencode.ts        # Client HTTP/SSE OpenCode, session manager, & reasoning recovery
-│       ├── opencode-server.ts # Spawner & watchdog binary bundled @opencode/cli (127.0.0.1)
+│       ├── opencode-server.ts # Spawner & watchdog binary bundled @opencode/cli + ECC provisioner
+│       ├── ecc.ts             # Integrasi ECC (31 skills, 27 agents, 36 commands, trigger-table)
 │       ├── executor.ts        # Hardened shell spawner, env sanitizer, sudo askpass, rate limit
 │       ├── status.ts          # Generator dashboard monospace bergaya netdata
 │       ├── alerts.ts          # Monitor proaktif Disk, RAM, & failed systemd units
 │       └── distro.ts          # Deteksi distro Linux (/etc/os-release) & package manager
-├── deploy/systemd/            # Unit systemd produksi (Hub, Node non-root, root, isolated)
+├── .opencode/                 # Konfigurasi OpenCode ECC (opencode.json, agents, commands, plugins, tools)
+├── skills/                    # 31 Curated ECC Skills (SRE, Network, Docker/K8s, DB, Security, Safety Guard)
+├── contexts/                  # Konteks mode operasional ECC (dev, review, research)
+├── rules/common/              # Aturan standar keamanan, coding style, & verifikasi ECC
+├── deploy/systemd/            # Unit systemd produksi (Full-Root & Isolated)
 ├── docs/                      # Dokumentasi lengkap arsitektur, deploy, keamanan, & operasi
 ├── tests/
-│   └── poc-smoke.js           # 21 skenario pengujian otomatis end-to-end, OpenCode, & keamanan
+│   └── poc-smoke.js           # 22 skenario pengujian otomatis end-to-end, OpenCode, ECC, & keamanan
 ├── .env.example               # Template konfigurasi Hub & Node
 ├── .npmrc                     # Konfigurasi npm (omit=optional) untuk instalasi lintas platform
 └── package.json
@@ -94,10 +99,10 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 - Node.js `>= 20.3.0`.
 - Token Bot Telegram dari [@BotFather](https://t.me/BotFather) dan Telegram User ID admin.
 
-### 1. Instalasi & Build (Mode Full-Root)
+### 1. Instalasi & Build (Mode Full-Root + ECC Integration)
 ```bash
 mkdir -p /opt/aster-fleet
-git clone -b full-root git@github.com:willtanoe/sysagent.git /opt/aster-fleet
+git clone -b root-ecc-integrate git@github.com:willtanoe/sysagent.git /opt/aster-fleet
 cd /opt/aster-fleet
 npm ci
 cp .env.example .env
@@ -109,7 +114,7 @@ npm run build
 ```bash
 npm test
 ```
-Menjalankan 21 skenario pengujian tanpa ketergantungan jaringan luar: autentikasi token master & per-node, eksekusi multi-node terisolasi, *approval gate*, pemblokiran perintah destruktif, sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`), pembatalan proses (`/stop`), *proactive alert*, integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), dan *auto-reconnect*.
+Menjalankan 22 skenario pengujian tanpa ketergantungan jaringan luar: autentikasi token master & per-node, eksekusi multi-node terisolasi, *approval gate*, pemblokiran perintah destruktif, sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`), pembatalan proses (`/stop`), *proactive alert*, integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), integrasi **ECC (Everything Claude Code)** (`listEccSkills`, `buildEccContextForPrompt`, `provisionOpenCodeEcc`, & RPC `__builtin:ecc`), serta *auto-reconnect*.
 
 ### 3. Menjalankan Hub & Node
 - **Menjalankan Hub**:
@@ -138,6 +143,7 @@ Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfiguras
 | `/svc <aksi> <unit>` | Mengelola service `systemd`: `status`, `start`, `stop`, `restart`, `reload`, `enable`, `disable` |
 | `/exec <perintah>` | Menjalankan perintah shell langsung di node aktif (atau gunakan awalan `$ <perintah>`) |
 | `/chat <prompt>` | Konsultasi & investigasi interaktif bersama AI SRE Agent (atau kirim pesan teks biasa) |
+| `/ecc [sub\|workflow]` | Melihat katalog ECC (`status`, `skills`, `agents`, `commands`) atau menjalankan workflow/skill/agent ECC di node aktif |
 | `/stop` | Menghentikan tugas yang sedang berjalan dan membunuh seluruh *process tree* shell di node |
 | `/auditcheck [node]` | Memverifikasi keutuhan rantai hash SHA-256 pada file audit lokal di node |
 | `/model [id\|reset]` | Melihat atau mengganti model AI untuk chat ini |

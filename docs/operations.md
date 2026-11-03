@@ -37,8 +37,14 @@ Seluruh perintah berikut dijalankan pada node yang sedang aktif di chat Anda:
 1. **Shell Langsung (`$ <perintah>` atau `/exec <perintah>`)**:
    Gunakan awalan `$ ` (contoh: `$ uptime` atau `$ systemctl restart redis`) ketika Anda sudah tahu persis perintah yang ingin dijalankan tanpa melalui penalaran LLM. Perintah tetap melewati *Risk Classifier* dan *Approval Gate*.
 2. **Konsultasi & Investigasi AI (`/chat <prompt>` atau teks biasa)**:
-   Gunakan untuk investigasi bertahap (contoh: *"Cek kenapa penggunaan disk di /var penuh dan bersihkan log journal yang lebih tua dari 7 hari"*). Baik dalam mode default `ENGINE=opencode` (bundled `@opencode/cli`) maupun `ENGINE=local`, agen AI akan menjalankan perintah inspeksi *read-only* secara mandiri dan meminta persetujuan tombol inline sebelum menjalankan perintah pembersihan/perubahan.
-3. **Mengganti Model AI (`/model`)**:
+   Gunakan untuk investigasi bertahap (contoh: *"Cek kenapa penggunaan disk di /var penuh dan bersihkan log journal yang lebih tua dari 7 hari"*). Baik dalam mode default `ENGINE=opencode` (bundled `@opencode/cli`) maupun `ENGINE=local`, agen AI otomatis memuat skill **ECC (Everything Claude Code)** yang relevan melalui *Trigger-Table Lazy Loading* (`src/node/ecc.ts`), menjalankan perintah inspeksi *read-only* secara mandiri, dan meminta persetujuan tombol inline sebelum menjalankan perintah pembersihan/perubahan.
+3. **Katalog & Workflow ECC (`/ecc`)**:
+   - `/ecc` atau `/ecc status`: Menampilkan status integrasi ECC di node aktif beserta ringkasan *skills*, *agents*, dan *commands*.
+   - `/ecc skills`: Menampilkan daftar 31 skill SRE, jaringan, database, kontainer, dan keamanan dari ECC.
+   - `/ecc agents`: Menampilkan daftar 27 agen spesialis ECC (`security-reviewer`, `network-config-reviewer`, `database-reviewer`, `architect`, `planner`, dll.).
+   - `/ecc commands`: Menampilkan daftar 36 workflow command ECC (`/verify`, `/plan`, `/security`, `/security-scan`, `/code-review`, `/pm2`, dll.).
+   - `/ecc <nama_skill_atau_agent_atau_command> <instruksi>`: Menjalankan tugas di node aktif menggunakan template command, agen spesialis, atau skill ECC tersebut (contoh: `/ecc network-interface-health cek error CRC di eth0`, `/ecc production-audit evaluasi kesiapan server ini`, atau `/ecc verify`).
+4. **Mengganti Model AI (`/model`)**:
    - Kirim `/model` tanpa argumen untuk melihat model aktif saat ini beserta daftar model gratis yang tersedia dari engine OpenCode di node aktif (misal `opencode/glm-5.3-flash-free`, `opencode/minimax-m2.5-free`, dll.).
    - Kirim `/model <provider/model>` untuk mengganti model pada sesi chat ini (otomatis membuat sesi OpenCode baru agar terhindar dari konflik riwayat `reasoning_content`).
    - Kirim `/model reset` untuk kembali ke model default node.

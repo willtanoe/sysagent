@@ -8,6 +8,13 @@ const { NodeExecutor, sanitizeEnv, stripRedundantSudo } = require("../dist/node/
 const { NodeEngine } = require("../dist/node/engine.js");
 const { isManagedOpenCode, resolveOpenCodeBinary } = require("../dist/node/opencode-server.js");
 const { OpenCodeRunner } = require("../dist/node/opencode.js");
+const {
+  listEccSkills,
+  listEccAgents,
+  listEccCommands,
+  buildEccContextForPrompt,
+  provisionOpenCodeEcc,
+} = require("../dist/node/ecc.js");
 const { createNodeAlertEvaluator } = require("../dist/node/alerts.js");
 const { assessRisk, isReadOnlyCommand } = require("../dist/shared/risk.js");
 const { redactSecrets } = require("../dist/shared/audit.js");
@@ -247,15 +254,13 @@ async function runTests() {
   console.log("✓ 12. Redaksi secret audit & RPC /auditcheck berfungsi dengan benar");
 
   // 13. Built-in Status Dashboard (__builtin:status)
-  let statusOut = "";
-  hub.startRun("hongyun", 1001, "__builtin:status", {
-    onChunk: () => {},
-    onApprovalReq: () => {},
-    onDone: (res) => {
-      statusOut = res;
-    },
+  const statusOut = await new Promise((resolve, reject) => {
+    hub.startRun("hongyun", 1001, "__builtin:status", {
+      onChunk: () => {},
+      onApprovalReq: () => {},
+      onDone: (res, err) => (err ? reject(new Error(err)) : resolve(res)),
+    });
   });
-  await sleep(1000);
   assert.ok(statusOut.includes("load") && statusOut.includes("mem") && statusOut.includes("disk"));
   console.log("✓ 13. Dashboard monospace /status berhasil dibangun dari node");
 
@@ -479,6 +484,45 @@ async function runTests() {
   assert.strictEqual(tamperedVerify.ok, false, "Audit verifier harus mendeteksi baris yang dimanipulasi");
   console.log("✓ 21. Tamper-detection mendeteksi manipulasi file audit pada baris ke-" + tamperedVerify.brokenAt);
 
+  // 22. Integrasi ECC (Everything Claude Code): Skills, Agents, Commands, Trigger-Table, OpenCode Provisioning, & RPC
+  const eccSkills = listEccSkills();
+  const eccAgents = listEccAgents();
+  const eccCommands = listEccCommands();
+  assert.ok(eccSkills.length >= 25, "Harus memuat minimal 25 skill ECC");
+  assert.ok(eccSkills.some((s) => s.name === "safety-guard"), "Skill safety-guard harus tersedia");
+  assert.ok(eccSkills.some((s) => s.name === "network-interface-health"), "Skill network-interface-health harus tersedia");
+  assert.ok(eccAgents.some((a) => a.name === "security-reviewer"), "Agent security-reviewer harus tersedia");
+  assert.ok(eccAgents.some((a) => a.name === "network-config-reviewer"), "Agent network-config-reviewer harus tersedia");
+  assert.ok(eccCommands.some((c) => c.name === "verify"), "Command /verify harus tersedia");
+  assert.ok(eccCommands.some((c) => c.name === "pm2"), "Command /pm2 harus tersedia");
+
+  const netEnhance = buildEccContextForPrompt("Cek kenapa ethtool eth0 banyak CRC dan packet loss");
+  assert.ok(netEnhance.matchedSkills.includes("network-interface-health"), "Trigger-table harus mencocokkan network-interface-health");
+  assert.strictEqual(netEnhance.matchedAgent, "network-config-reviewer");
+
+  const explicitCmd = buildEccContextForPrompt("ecc:verify cek kesiapan rilis");
+  assert.strictEqual(explicitCmd.matchedCommand, "verify");
+  assert.ok(explicitCmd.rewrittenPrompt.includes("Verification"), "Template command verify harus disuntikkan");
+
+  const tmpEccCfg = path.join("/tmp", `aster-ecc-cfg-${Date.now()}`);
+  try {
+    const provisionedDir = provisionOpenCodeEcc(tmpEccCfg);
+    assert.ok(fs.existsSync(path.join(provisionedDir, "opencode.json")), "opencode.json harus terprovisi");
+    assert.ok(fs.existsSync(path.join(provisionedDir, "skills", "safety-guard", "SKILL.md")), "Skill ECC harus tertaut di XDG_CONFIG_HOME/opencode/skills");
+  } finally {
+    fs.rmSync(tmpEccCfg, { recursive: true, force: true });
+  }
+
+  const eccRpcOut = await new Promise((resolve, reject) => {
+    hub.startRun("hongchen", 1001, "__builtin:ecc:status", {
+      onChunk: () => {},
+      onApprovalReq: () => {},
+      onDone: (fullText, err) => (err ? reject(new Error(err)) : resolve(fullText)),
+    });
+  });
+  assert.ok(eccRpcOut.includes("ECC (Everything Claude Code) Integration"), "RPC __builtin:ecc:status harus mengembalikan status ECC");
+  console.log(`✓ 22. Integrasi ECC (${eccSkills.length} skills, ${eccAgents.length} agents, ${eccCommands.length} commands, trigger-table & OpenCode provisioning) lulus`);
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -488,7 +532,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 21 TEST PRODUKSI, OPENCODE BUNDLE, & KEAMANAN LULUS!");
+  console.log("SEMUA 22 TEST PRODUKSI, OPENCODE, ECC, & KEAMANAN LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

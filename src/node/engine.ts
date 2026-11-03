@@ -5,6 +5,7 @@ import { buildNodeStatusText } from "./status";
 import { assessRisk, isReadOnlyCommand } from "../shared/risk";
 import { ChatHistoryItem, TokenUsage } from "../shared/protocol";
 import { OpenCodeRunner, OpenCodeConfig } from "./opencode";
+import { buildEccContextForPrompt, formatEccCatalogReport } from "./ecc";
 
 export const ABORTED = "ABORTED";
 
@@ -121,9 +122,9 @@ export class NodeEngine {
     return chain.length > 0 ? chain : ["gpt-4o-mini"];
   }
 
-  private buildSystemPrompt(): string {
+  private buildSystemPrompt(eccContextBlock?: string): string {
     return [
-      `Anda adalah Aster, Sysadmin & SRE Agent di server node '${this.nodeId}'.`,
+      `Anda adalah Aster, Sysadmin & SRE Agent di server node '${this.nodeId}' dengan integrasi ECC (Everything Claude Code).`,
       `- ${distroContext()}`,
       ...(isRoot
         ? [
@@ -138,6 +139,7 @@ export class NodeEngine {
       "- sudo tersedia secara non-interaktif; jangan pernah menebak atau menampilkan password.",
       "- Gunakan gaya bahasa ops ringkas dan presisi dalam bahasa Indonesia.",
       "- Tampilkan data terstruktur (status, disk, service, port) sebagai tabel monospace di dalam blok kode.",
+      ...(eccContextBlock ? ["", eccContextBlock] : []),
     ].join("\n");
   }
 
@@ -198,6 +200,13 @@ export class NodeEngine {
       return `[${this.nodeId}] Session direset.`;
     }
 
+    if (trimmed === "__builtin:ecc" || trimmed.startsWith("__builtin:ecc:")) {
+      const sub = trimmed.startsWith("__builtin:ecc:") ? trimmed.slice("__builtin:ecc:".length) : "status";
+      const out = formatEccCatalogReport(this.nodeId, sub);
+      onChunk(out);
+      return out;
+    }
+
     // 2. Direct Ops Mode ($ <perintah>)
     if (trimmed.startsWith("$ ")) {
       const cmd = trimmed.slice(2).trim();
@@ -212,15 +221,17 @@ export class NodeEngine {
       return `[${this.nodeId}]\n${out}`;
     }
 
+    const eccEnhancement = buildEccContextForPrompt(trimmed);
+
     // 3. Engine OpenCode (Bundled / External `opencode serve`)
     if (this.engineMode === "opencode" && this.openCode) {
       const chatId = ctx?.chatId ?? 0;
       const userId = ctx?.userId;
 
-      return await this.openCode.run(trimmed, {
+      return await this.openCode.run(eccEnhancement.rewrittenPrompt, {
         chatId,
         model: modelOverride || this.defaultModel,
-        systemContext: this.buildSystemPrompt(),
+        systemContext: this.buildSystemPrompt(eccEnhancement.contextBlock),
         signal,
         onPartial: (partialText) => {
           onChunk(partialText);
@@ -304,7 +315,7 @@ export class NodeEngine {
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       {
         role: "system",
-        content: this.buildSystemPrompt(),
+        content: this.buildSystemPrompt(eccEnhancement.contextBlock),
       },
     ];
 
@@ -324,7 +335,7 @@ export class NodeEngine {
 
     messages.push({
       role: "user",
-      content: trimmed,
+      content: eccEnhancement.rewrittenPrompt,
     });
 
     const tools: OpenAI.ChatCompletionTool[] = [

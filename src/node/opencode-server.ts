@@ -4,6 +4,7 @@ import * as fs from "fs";
 import { createServer } from "net";
 import * as path from "path";
 import { sanitizeEnv } from "./executor";
+import { provisionOpenCodeEcc } from "./ecc";
 
 const READY_TIMEOUT_MS = 60_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -95,6 +96,7 @@ export class ManagedOpenCodeServer {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
+    provisionOpenCodeEcc(configDir);
 
     const env: NodeJS.ProcessEnv = {
       ...sanitizeEnv(process.env),
@@ -104,6 +106,8 @@ export class ManagedOpenCodeServer {
       XDG_CACHE_HOME: cacheDir,
       XDG_CONFIG_HOME: configDir,
       OPENCODE_DISABLE_AUTOUPDATE: "1",
+      ECC_HOOK_PROFILE: process.env.ECC_HOOK_PROFILE || "standard",
+      ECC_DISABLED_HOOKS: process.env.ECC_DISABLED_HOOKS || "",
     };
 
     const bin = resolveOpenCodeBinary(this.opts.bin);
