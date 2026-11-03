@@ -155,13 +155,20 @@ async function runTests() {
   assert.ok(approvalReqReceived, "Approval request harus sampai ke Hub");
   console.log("✓ 8. Approval bridge: penolakan operator berhasil diteruskan ke node");
 
-  // 9. Command Berisiko di Hongyun: Setujui oleh Operator via Hub
+  // 9. Command Berisiko di Hongyun: Setujui oleh Operator via Hub (validasi callback <=64 byte & isolasi chatId)
   let approvalApprovedReceived = false;
   hub.startRun("hongyun", 1001, "$ cp /etc/hostname /tmp/aster-hostname-test", {
     onChunk: () => {},
     onApprovalReq: (approvalId) => {
       approvalApprovedReceived = true;
-      hub.sendApproval("hongyun", "fake", approvalId, true);
+      const cbData = `ap:${approvalId}:yes`;
+      assert.ok(Buffer.byteLength(cbData, "utf8") <= 64, "Telegram callback_data wajib <= 64 byte");
+      assert.strictEqual(
+        hub.resolveApprovalById(approvalId, true, 9999),
+        false,
+        "Chat lain tidak boleh menyetujui approval milik chat 1001"
+      );
+      assert.strictEqual(hub.resolveApprovalById(approvalId, true, 1001), true);
     },
     onDone: (res) => {
       assert.ok(!res.includes("[REJECTED]"), "Tidak boleh ditolak");
@@ -189,9 +196,16 @@ async function runTests() {
   await sleep(400);
   assert.ok(blockRunDone, "Blocked command selesai");
   assert.strictEqual(assessRisk("cat .env").level, "block");
+  assert.strictEqual(assessRisk("cat .e\\nv").level, "block");
   assert.strictEqual(assessRisk("cat /etc/shadow").level, "block");
+  assert.strictEqual(assessRisk("cat /etc/{shadow}").level, "block");
+  assert.strictEqual(assessRisk("cat /etc/shad*").level, "block");
   assert.strictEqual(assessRisk("printenv").level, "block");
   assert.strictEqual(assessRisk("echo pass | sudo -S id").level, "block");
+  assert.strictEqual(assessRisk("touch /tmp/x").level, "approve");
+  assert.strictEqual(assessRisk("mkdir -p /tmp/x").level, "approve");
+  assert.strictEqual(assessRisk("find /tmp -exec rm {} +").level, "approve");
+  assert.strictEqual(assessRisk("/opt/custom/deploy.sh").level, "approve");
   assert.strictEqual(isReadOnlyCommand("uname -a | grep -i linux"), true);
   assert.strictEqual(isReadOnlyCommand("echo hi > /tmp/x"), false);
   console.log("✓ 10. Risk classifier memblokir perintah destruktif, pembacaan secret, & env leak");

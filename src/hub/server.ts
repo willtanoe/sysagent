@@ -75,6 +75,7 @@ export class HubServer extends EventEmitter {
   private wss: WebSocketServer | null = null;
   private nodes = new Map<string, ConnectedNode>();
   private runs = new Map<string, ActiveRun>();
+  private approvals = new Map<string, { nodeId: string; runId: string; chatId: number }>();
 
   constructor(port: number, secretToken: string, opts?: HubServerOptions) {
     super();
@@ -228,15 +229,27 @@ export class HubServer extends EventEmitter {
 
               if (msg.type === "node_approval_req") {
                 const run = this.runs.get(msg.runId);
-                if (run) run.onApprovalReq(msg.approvalId, msg.command, msg.reason);
+                if (run && run.nodeId === authenticatedNodeId) {
+                  this.approvals.set(msg.approvalId, {
+                    nodeId: authenticatedNodeId,
+                    runId: msg.runId,
+                    chatId: run.chatId,
+                  });
+                  Promise.resolve(run.onApprovalReq(msg.approvalId, msg.command, msg.reason)).catch((err: any) => {
+                    console.error("[hub] Gagal mengirim permintaan approval:", err?.message ?? err);
+                  });
+                }
                 return;
               }
 
               if (msg.type === "node_done") {
                 const run = this.runs.get(msg.runId);
-                if (run) {
-                  run.onDone(msg.fullText, msg.error, msg.usage);
+                if (run && run.nodeId === authenticatedNodeId) {
+                  this.clearApprovalsForRun(msg.runId);
                   this.runs.delete(msg.runId);
+                  Promise.resolve(run.onDone(msg.fullText, msg.error, msg.usage)).catch((err: any) => {
+                    console.error("[hub] Gagal menyelesaikan callback onDone:", err?.message ?? err);
+                  });
                 }
                 return;
               }
@@ -257,6 +270,15 @@ export class HubServer extends EventEmitter {
               if (current && current.ws === ws) {
                 console.log(`[hub] Node disconnect: "${authenticatedNodeId}"`);
                 this.nodes.delete(authenticatedNodeId);
+                for (const [runId, run] of this.runs.entries()) {
+                  if (run.nodeId === authenticatedNodeId) {
+                    this.clearApprovalsForRun(runId);
+                    this.runs.delete(runId);
+                    Promise.resolve(
+                      run.onDone(`[${authenticatedNodeId}] Koneksi node terputus.`, "NODE_DISCONNECTED")
+                    ).catch(() => undefined);
+                  }
+                }
                 this.emit("node_left", authenticatedNodeId);
               }
             }
@@ -279,6 +301,7 @@ export class HubServer extends EventEmitter {
       }
       this.nodes.clear();
       this.runs.clear();
+      this.approvals.clear();
 
       const closeHttps = () => {
         if (this.httpsServer) {
@@ -373,16 +396,37 @@ export class HubServer extends EventEmitter {
     return count;
   }
 
-  sendApproval(nodeId: string, runId: string, approvalId: string, approved: boolean): void {
-    const node = this.nodes.get(nodeId);
-    if (!node || node.ws.readyState !== WebSocket.OPEN) return;
+  private clearApprovalsForRun(runId: string): void {
+    for (const [approvalId, meta] of this.approvals.entries()) {
+      if (meta.runId === runId) this.approvals.delete(approvalId);
+    }
+  }
+
+  sendApproval(nodeId: string, runId: string, approvalId: string, approved: boolean, chatId?: number): boolean {
+    const tracked = this.approvals.get(approvalId);
+    if (chatId !== undefined && tracked && tracked.chatId !== chatId) {
+      return false;
+    }
+    this.approvals.delete(approvalId);
+
+    const targetNodeId = tracked?.nodeId ?? nodeId;
+    const targetRunId = tracked?.runId ?? runId;
+    const node = this.nodes.get(targetNodeId);
+    if (!node || node.ws.readyState !== WebSocket.OPEN) return false;
 
     const msg: HubToNodeMsg = {
       type: "hub_approval_res",
-      runId,
+      runId: targetRunId,
       approvalId,
       approved,
     };
     node.ws.send(JSON.stringify(msg));
+    return true;
+  }
+
+  resolveApprovalById(approvalId: string, approved: boolean, chatId?: number): boolean {
+    const tracked = this.approvals.get(approvalId);
+    if (!tracked) return false;
+    return this.sendApproval(tracked.nodeId, tracked.runId, approvalId, approved, chatId);
   }
 }

@@ -42,10 +42,10 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
    - Verifikasi token *constant-time* (`crypto.timingSafeEqual` di atas SHA-256 digest) dengan dukungan token master maupun token unik per-node (`NODE_TOKENS`).
    - Sanitasi *environment* (`sanitizeEnv`) sehingga *child process* shell tidak dapat membocorkan token/kredensial dari variabel *environment*.
    - Eksekusi non-interaktif (`sudo -n` atau `sudo -A` via *askpass* mode `0700`) dan penghentian seluruh *process group* (`-pid` `SIGKILL`) saat *timeout* atau dibatalkan lewat `/stop`.
-4. **3-Tier Risk Classifier & Approval Gate (di OpenCode maupun Local Engine)**:
-   - `allow`: Perintah inspeksi *read-only* langsung dieksekusi (otomatis di-*allow* pada *permission bridge* OpenCode maupun `NodeExecutor`).
-   - `approve`: Perintah mutasi (`sudo`, `systemctl restart`, `rm`, `chmod`, `apt`/`dnf`, modifikasi firewall, redirection file, atau `edit`/`write` file di OpenCode) wajib disetujui operator via tombol inline Telegram.
-   - `block`: Perintah destruktif (`rm -rf /`, `mkfs`, fork bomb) dan pembacaan file rahasia (`.env`, `/etc/shadow`, `.ssh/*`, bocoran `printenv`) langsung ditolak di level node tanpa opsi *override*.
+4. **3-Tier Risk Classifier & Default-Approve Allowlist Gate (di OpenCode maupun Local Engine)**:
+   - `allow`: Hanya perintah inspeksi *read-only* yang terdaftar di *allowlist* `isReadOnlyCommand` (atau pembacaan file non-rahasia di OpenCode) yang langsung dieksekusi tanpa mengganggu operator.
+   - `approve`: Perintah mutasi (`sudo`, `systemctl restart`, `rm`, `mkdir`, `touch`, `chmod`, `apt`/`dnf`, `tar`, `find -exec`, modifikasi firewall, redirection file, `edit`/`write` file di OpenCode, maupun *binary* kustom di luar daftar *read-only*) wajib disetujui operator via tombol inline Telegram yang terikat ke `chatId` peminta.
+   - `block`: Perintah destruktif (`rm -rf /`, `mkfs`, fork bomb) dan pembacaan file rahasia (`.env`, `/etc/shadow`, `.ssh/*`, `hub-state.json`, `askpass`, bocoran `printenv`, termasuk *obfuscation* backslash/kurung kurawal maupun tool `read` OpenCode) langsung ditolak di level node tanpa opsi *override*, serta `subagent`/`question` di OpenCode dinonaktifkan (`deny`).
 5. **Tamper-Evident Audit Trail**: Setiap eksekusi di node dicatat ke file JSONL lokal (`0600`) dengan redaksi *secret* otomatis dan rantai hash SHA-256 yang dapat diverifikasi kapan saja lewat `/auditcheck`.
 6. **Alert Kesehatan Proaktif**: Setiap node memantau penggunaan Disk, Memory, dan unit `systemd` yang gagal, lalu meneruskan notifikasi *alert* dan pemulihan (*recovery*) secara *real-time* ke Telegram admin melalui Hub.
 
@@ -143,7 +143,7 @@ Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfiguras
 | `/auditcheck [node]` | Memverifikasi keutuhan rantai hash SHA-256 pada file audit lokal di node |
 | `/model [id\|reset]` | Melihat atau mengganti model AI untuk chat ini |
 | `/usage` | Menampilkan statistik pemakaian token AI pada chat ini |
-| `/reset` | Menghapus riwayat percakapan dan statistik token untuk node aktif |
+| `/reset` | Menghapus riwayat percakapan, sesi OpenCode, dan statistik token untuk node aktif |
 | `/id` | Menampilkan Telegram User ID dan Chat ID |
 | `/help` | Menampilkan panduan perintah lengkap |
 

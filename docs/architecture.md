@@ -84,17 +84,18 @@ sequenceDiagram
 1. **Built-in RPC**:
    - `__builtin:status`: Mengumpulkan 14 metrik sistem secara paralel (`status.ts`) dan merender dashboard monospace bergaya netdata tanpa memicu AI atau mengotori log audit perintah operator.
    - `__builtin:auditcheck`: Memverifikasi seluruh baris pada file `audit-<nodeId>.jsonl` dari hash `GENESIS` hingga baris terakhir dan melaporkan keutuhan rantai SHA-256.
-   - `__builtin:models`: Mengambil daftar model gratis (`freeModels`) dari daemon OpenCode pada node aktif untuk ditampilkan saat operator memanggil `/model`.
+   - `__builtin:models`: Mengambil daftar model yang tersedia (`listModels()` via `/api/model`) dari daemon OpenCode pada node aktif (atau daftar `modelChain` pada mode `local`) untuk ditampilkan saat operator memanggil `/model`.
+   - `__builtin:reset`: Menghapus sesi OpenCode aktif untuk `chatId` terkait di node saat operator memanggil `/reset`.
 2. **Direct Shell Mode (`$ <cmd>` atau `/exec <cmd>`)**:
    - Mengeksekusi perintah langsung melalui `NodeExecutor.runCommand` dengan penilaian risiko (`assessRisk`) dan *approval gate*.
 3. **Bundled OpenCode Engine Mode (`ENGINE=opencode` — Default)**:
    - Menggunakan paket resmi `@opencode/cli` yang telah dibundel di `node_modules/@opencode/cli`.
-   - Saat node hidup dan `OPENCODE_URL` kosong, `ManagedOpenCodeServer` (`src/node/opencode-server.ts`) otomatis mencari port bebas di `127.0.0.1`, menghasilkan password acak 24-byte (`OPENCODE_SERVER_PASSWORD`), dan menjalankan `opencode serve` dengan konfigurasi `permission: { bash: "ask", edit: "ask", write: "ask" }`.
-   - `OpenCodeRunner` (`src/node/opencode.ts`) mengelola sesi per `chatId`, menyuntikkan konteks distro Linux + hak akses (`root`/`non-root`) di pesan pertama sesi, memulihkan sesi secara otomatis jika terjadi ketidakcocokan `reasoning_content` saat berganti model, dan menangkap event SSE `permission.asked`.
+   - Saat node hidup dan `OPENCODE_URL` kosong, `ManagedOpenCodeServer` (`src/node/opencode-server.ts`) otomatis mencari port bebas di `127.0.0.1`, menghasilkan password acak 24-byte (`OPENCODE_SERVER_PASSWORD`), mengisolasi seluruh direktori `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, dan `XDG_CONFIG_HOME` di dalam direktori data node (`/var/lib/aster-node/opencode-<nodeId>`), serta menjalankan `opencode serve`.
+   - `OpenCodeRunner` (`src/node/opencode.ts`) membuat sesi per `chatId` dengan aturan `RULESET` ketat (`shell: ask`, `edit: ask`, `write: ask`, `read: ask`, `subagent: deny`, `question: deny`), menyuntikkan konteks sistem/distro Linux + hak akses (`root`/`non-root`) di pesan pertama sesi baru, memulihkan sesi secara otomatis jika terjadi ketidakcocokan `reasoning_content` saat berganti model, dan mem-polling permintaan izin di `/api/session/{sessionID}/permission`.
    - Setiap permintaan izin dari OpenCode dinilai oleh `assessRisk`:
-     - `block`: Langsung ditolak (`reject`) dan dicatat ke audit log node.
-     - `allow` (perintah *read-only*): Otomatis diizinkan (`once`) dan dicatat ke audit log node tanpa mengganggu operator.
-     - `approve` (perintah mutasi / edit file): Mengirim `node_approval_req` ke Hub sehingga tombol **Setujui / Tolak** muncul di Telegram.
+     - `block`: Langsung ditolak (`reject`) dan dicatat ke audit log node (termasuk upaya membaca file rahasia via tool `read` maupun `shell`).
+     - `allow` (pembacaan file non-rahasia via `read` atau perintah `shell` *read-only*): Otomatis diizinkan (`once`) dan dicatat ke audit log node tanpa mengganggu operator.
+     - `approve` (perintah mutasi `shell` atau `edit`/`write` file): Mengirim `node_approval_req` ke Hub sehingga tombol **Setujui / Tolak** muncul di Telegram.
 4. **Local AI Gateway Mode (`ENGINE=local`)**:
    - Menyusun *system prompt* yang dilengkapi informasi distro Linux (`distroContext()`) dan status *privilege* (`isRoot`), lalu memanggil endpoint kompatibel OpenAI (`GATEWAY_URL`).
    - Menyertakan riwayat percakapan ringkas per `(chatId, nodeId)` yang dikirim dari `HubStore`.

@@ -88,12 +88,21 @@ export class ManagedOpenCodeServer {
 
   private launch(): ChildProcess {
     const dataDir = this.opts.dataDir || path.join(process.cwd(), ".opencode-data");
+    const stateDir = path.join(dataDir, "state");
+    const cacheDir = path.join(dataDir, "cache");
+    const configDir = path.join(dataDir, "config");
     fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(cacheDir, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(configDir, { recursive: true, mode: 0o700 });
 
     const env: NodeJS.ProcessEnv = {
       ...sanitizeEnv(process.env),
       OPENCODE_SERVER_PASSWORD: this.password,
       XDG_DATA_HOME: dataDir,
+      XDG_STATE_HOME: stateDir,
+      XDG_CACHE_HOME: cacheDir,
+      XDG_CONFIG_HOME: configDir,
       OPENCODE_DISABLE_AUTOUPDATE: "1",
     };
 

@@ -7,6 +7,7 @@ export interface OpenCodePermission {
 export interface OpenCodeRunDeps {
   chatId: number;
   model?: string;
+  systemContext?: string;
   signal?: AbortSignal;
   onPartial: (text: string) => void;
   askApproval: (command: string, reason: string) => Promise<boolean>;
@@ -27,6 +28,9 @@ const RULESET = [
   { action: "shell", resource: "*", effect: "ask" },
   { action: "edit", resource: "*", effect: "ask" },
   { action: "write", resource: "*", effect: "ask" },
+  { action: "read", resource: "*", effect: "ask" },
+  { action: "subagent", resource: "*", effect: "deny" },
+  { action: "question", resource: "*", effect: "deny" },
 ];
 
 const REASONING_ERROR = /reasoning_content/i;
@@ -49,6 +53,7 @@ interface EventLike {
 export class OpenCodeRunner {
   private config: Required<OpenCodeConfig>;
   private sessions = new Map<number, string>();
+  private primedSessions = new Set<string>();
 
   constructor(config: OpenCodeConfig) {
     this.config = {
@@ -75,6 +80,8 @@ export class OpenCodeRunner {
   }
 
   clearSession(chatId: number): void {
+    const existing = this.sessions.get(chatId);
+    if (existing) this.primedSessions.delete(existing);
     this.sessions.delete(chatId);
   }
 
@@ -247,11 +254,16 @@ export class OpenCodeRunner {
     })();
 
     await new Promise((resolve) => setTimeout(resolve, Math.min(this.config.pollMs, 200)));
-    const promptResult = await this.api("POST", `/api/session/${sessionId}/prompt`, { text: prompt });
+    let effectivePrompt = prompt;
+    if (deps.systemContext && !this.primedSessions.has(sessionId)) {
+      effectivePrompt = `${deps.systemContext}\n\nPermintaan operator:\n${prompt}`;
+    }
+    const promptResult = await this.api("POST", `/api/session/${sessionId}/prompt`, { text: effectivePrompt });
     if (promptResult.status >= 400) {
       streamAbort.abort();
       throw new Error(`prompt gagal: ${promptResult.status} ${promptResult.raw.slice(0, 200)}`);
     }
+    this.primedSessions.add(sessionId);
 
     const deadline = Date.now() + this.config.timeoutMs;
     try {

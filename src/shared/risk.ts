@@ -26,11 +26,11 @@ export function hasFileRedirection(command: string): boolean {
 
 /** Target file rahasia yang tidak boleh dibaca atau disentuh. */
 export function isSecretAccess(raw: string): boolean {
-  // Hapus tanda kutip untuk mencegah obfuscation (mis. .e""nv)
-  const cmd = raw.replace(/["']/g, "");
+  // Hapus tanda kutip, backslash, dan kurung kurawal untuk mencegah obfuscation (mis. .e""nv, .e\nv, /etc/{shadow})
+  const cmd = raw.replace(/["'\\{}]/g, "");
 
   const SECRET =
-    /(?:^|[\s/])\.(?:env|en\?|en\*)(?!\.example\b)|(?:\/etc\/(?:g?shadow|sudoers(?:\.d)?\b))|id_(?:rsa|ed25519|ecdsa|dsa)\b|\.ssh\/|\.config\/aster|askpass(?:\.sh)?|wp-config(?:\.php)?|\.aws\/(?:credentials|config)|\.git-credentials|\.netrc|\.my\.cnf|\.pgpass|\/proc\/(?:[^\s]*\/)?envi[^\s]*/i;
+    /(?:^|[\s/])\.(?:env|en\?|en\*)(?!\.example\b)|(?:\/etc\/(?:g?shad(?:ow|[\w?*]*)|sudoers(?:\.d)?\b))|id_(?:rsa|ed25519|ecdsa|dsa)\b|\.ssh\/|\.config\/aster|askpass(?:[-_A-Za-z0-9.]*\.sh)?|hub-state\.json|wp-config(?:\.php)?|\.aws\/(?:credentials|config)|\.git-credentials|\.netrc|\.my\.cnf|\.pgpass|\/proc\/(?:[^\s]*\/)?envi[^\s]*/i;
 
   return SECRET.test(cmd);
 }
@@ -68,9 +68,11 @@ const NEEDS_APPROVAL: Rule[] = [
   { pattern: /\brm\b/, reason: "menghapus file" },
   { pattern: /\bmv\b/, reason: "memindahkan atau menimpa path" },
   { pattern: /\bdd\b/, reason: "operasi disk mentah" },
-  { pattern: /\bshred\b|\btruncate\b/, reason: "menghancurkan isi file" },
-  { pattern: /\bchmod\b|\bchown\b|\bchattr\b/, reason: "mengubah permission atau ownership" },
-  { pattern: /\bfind\b[^\n]*-delete\b/, reason: "hapus massal via find" },
+  { pattern: /\bshred\b|\btruncate\b|\bfallocate\b/, reason: "menghancurkan atau mengubah ukuran file" },
+  { pattern: /\bchmod\b|\bchown\b|\bchattr\b|\bsetfacl\b|\bsetfattr\b/, reason: "mengubah permission atau ownership" },
+  { pattern: /\bfind\b[^\n]*-(?:delete|exec|execdir|ok|okdir)\b/, reason: "hapus atau eksekusi massal via find" },
+  { pattern: /\b(?:mkdir|rmdir|touch|mktemp)\b/, reason: "membuat atau menghapus direktori/file" },
+  { pattern: /\b(?:tar|zip|unzip|gzip|gunzip|bzip2|xz|patch)\b/, reason: "manipulasi arsip atau patch file" },
   { pattern: /\bsystemctl\s+(start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload)\b/, reason: "mengubah state service" },
   { pattern: /\bservice\s+\S+\s+(start|stop|restart|reload)\b/, reason: "mengubah state service" },
   { pattern: /\b(reboot|shutdown|halt|poweroff)\b|\binit\s+[06]\b/, reason: "mematikan atau reboot server" },
@@ -237,13 +239,13 @@ export function isReadOnlyCommand(command: string): boolean {
 
     // Command read-only yang jelas
     const basicReadOnly = new Set([
-      "uname", "hostname", "uptime", "nproc", "whoami", "id", "arch",
-      "df", "free", "ps", "ss", "netstat", "top", "htop", "vmstat", "iostat",
-      "journalctl", "dmesg", "lsof", "lsmod", "getenforce", "sestatus",
-      "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "awk", "sed",
-      "wc", "sort", "uniq", "cut", "tr", "echo", "printf", "stat", "file",
-      "which", "whereis", "type", "readlink", "realpath", "diff", "cmp", "comm",
-      "lscpu", "lsblk", "lspci", "lsusb", "ping", "traceroute", "dig", "nslookup", "host",
+      "uname", "hostname", "uptime", "nproc", "whoami", "id", "arch", "pwd", "date", "sleep",
+      "df", "free", "ps", "ss", "netstat", "top", "htop", "vmstat", "iostat", "ip", "ifconfig", "route", "arp",
+      "journalctl", "dmesg", "lsof", "lsmod", "getenforce", "sestatus", "last", "w", "who", "groups",
+      "ls", "cat", "head", "tail", "grep", "egrep", "fgrep", "awk", "sed", "lsattr", "getfacl",
+      "wc", "sort", "uniq", "cut", "tr", "echo", "printf", "stat", "file", "md5sum", "sha1sum", "sha256sum",
+      "which", "whereis", "type", "readlink", "realpath", "basename", "dirname", "diff", "cmp", "comm",
+      "lscpu", "lsblk", "lspci", "lsusb", "ping", "traceroute", "dig", "nslookup", "host", "true", "false",
     ]);
 
     if (basicReadOnly.has(cmd)) return true;
@@ -310,6 +312,9 @@ export function assess(command: string): Verdict {
   }
   for (const rule of NEEDS_APPROVAL) {
     if (matchesRule(rule)) return { level: "approve", reason: rule.reason };
+  }
+  if (!isReadOnlyCommand(candidate)) {
+    return { level: "approve", reason: "perintah di luar daftar aman read-only" };
   }
   return { level: "allow", reason: "" };
 }

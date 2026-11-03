@@ -178,8 +178,8 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           },
           onApprovalReq: async (approvalId, command, reason) => {
             const kb = new InlineKeyboard()
-              .text("✅ Setujui", `appr:${nodeId}:${currentRunId}:${approvalId}:yes`)
-              .text("❌ Tolak", `appr:${nodeId}:${currentRunId}:${approvalId}:no`);
+              .text("✅ Setujui", `ap:${approvalId}:yes`)
+              .text("❌ Tolak", `ap:${approvalId}:no`);
 
             await ctx.reply(
               `🔐 <b>Persetujuan Diperlukan di [${escapeHtml(nodeId)}]</b>\n` +
@@ -538,6 +538,17 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   bot.command("reset", async (ctx) => {
     const current = hubStore.getActiveNode(ctx.chat.id);
     hubStore.resetChat(ctx.chat.id, current);
+    if (current && hub.getNode(current)) {
+      try {
+        hub.startRun(current, ctx.chat.id, "__builtin:reset", {
+          onChunk: () => {},
+          onApprovalReq: () => {},
+          onDone: () => {},
+        });
+      } catch {
+        // abaikan jika node sedang sibuk/offline
+      }
+    }
     await sendFormatted(
       ctx,
       `🧠 Riwayat percakapan ${current ? `untuk node <b>${escapeHtml(current)}</b> ` : ""}dan statistik token telah direset.`,
@@ -562,12 +573,13 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     );
   });
 
-  // Callback persetujuan: appr:<nodeId>:<runId>:<approvalId>:<yes|no>
-  bot.callbackQuery(/^appr:([^:]+):([^:]+):([^:]+):(yes|no)$/, async (ctx) => {
-    const [, nodeId, runId, approvalId, decision] = ctx.match;
-    const approved = decision === "yes";
-
-    hub.sendApproval(nodeId!, runId!, approvalId!, approved);
+  const handleApprovalCallback = async (ctx: Context, ok: boolean, approved: boolean) => {
+    if (!ok) {
+      await ctx
+        .answerCallbackQuery({ text: "⚠️ Permintaan persetujuan sudah kedaluwarsa atau tidak valid." })
+        .catch(() => undefined);
+      return;
+    }
     await ctx
       .answerCallbackQuery({
         text: approved ? "Perintah disetujui." : "Perintah ditolak.",
@@ -577,13 +589,29 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const statusText = approved
       ? "✅ <b>DISETUJUI</b> oleh operator."
       : "❌ <b>DITOLAK</b> oleh operator.";
-    const originalText = ctx.callbackQuery.message?.text ?? "";
+    const originalText = ctx.callbackQuery?.message?.text ?? "";
     await ctx
       .editMessageText(`${escapeHtml(originalText)}\n\n${statusText}`, {
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: [] },
       })
       .catch(() => undefined);
+  };
+
+  // Callback persetujuan ringkas (<=64 byte): ap:<approvalId>:<yes|no>
+  bot.callbackQuery(/^ap:([^:]+):(yes|no)$/, async (ctx) => {
+    const [, approvalId, decision] = ctx.match;
+    const approved = decision === "yes";
+    const ok = hub.resolveApprovalById(approvalId!, approved, ctx.chat?.id);
+    await handleApprovalCallback(ctx, ok, approved);
+  });
+
+  // Callback persetujuan legacy: appr:<nodeId>:<runId>:<approvalId>:<yes|no>
+  bot.callbackQuery(/^appr:([^:]+):([^:]+):([^:]+):(yes|no)$/, async (ctx) => {
+    const [, nodeId, runId, approvalId, decision] = ctx.match;
+    const approved = decision === "yes";
+    const ok = hub.sendApproval(nodeId!, runId!, approvalId!, approved, ctx.chat?.id);
+    await handleApprovalCallback(ctx, ok, approved);
   });
 
   // Handler pesan teks biasa / mention di grup

@@ -42,7 +42,9 @@ Seluruh perintah berikut dijalankan pada node yang sedang aktif di chat Anda:
    - Kirim `/model` tanpa argumen untuk melihat model aktif saat ini beserta daftar model gratis yang tersedia dari engine OpenCode di node aktif (misal `opencode/glm-5.3-flash-free`, `opencode/minimax-m2.5-free`, dll.).
    - Kirim `/model <provider/model>` untuk mengganti model pada sesi chat ini (otomatis membuat sesi OpenCode baru agar terhindar dari konflik riwayat `reasoning_content`).
    - Kirim `/model reset` untuk kembali ke model default node.
-4. **Menghentikan Tugas (`/stop`)**:
+4. **Mereset Sesi & Riwayat (`/reset`)**:
+   Kirim `/reset` untuk menghapus riwayat percakapan dan statistik token pada node aktif di Hub sekaligus mereset sesi aktif OpenCode (`__builtin:reset`) di node tersebut.
+5. **Menghentikan Tugas (`/stop`)**:
    Jika suatu perintah atau sesi AI berjalan terlalu lama, kirim `/stop`. Hub akan mengirim sinyal `hub_cancel` ke node untuk membatalkan sesi OpenCode / loop AI dan membunuh seluruh *process group* shell (`SIGKILL`).
 
 ---

@@ -146,7 +146,7 @@ Agar user `aster` dapat menjalankan perintah administrasi sistem setelah Anda me
 ```sudoers
 aster ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/journalctl, /usr/bin/apt-get, /usr/bin/dnf, /usr/sbin/ufw
 ```
-Atau jika menggunakan `SUDO_PASSWORD` di `.env`, `NodeExecutor` otomatis membuat skrip `askpass` dengan izin `0700` di `~/.config/aster/askpass-<nodeId>.sh`.
+Atau jika menggunakan `SUDO_PASSWORD` di `.env`, `NodeExecutor` otomatis membuat skrip `askpass` dengan izin `0700` di `~/.config/aster/askpass-<nodeId>.sh` (atau otomatis beralih ke `/var/lib/aster-node/.aster-askpass/askpass-<nodeId>.sh` saat berjalan dengan `ProtectHome=true` pada `aster-node-isolated.service`).
 
 ---
 

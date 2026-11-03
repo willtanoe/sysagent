@@ -79,18 +79,28 @@ export class NodeExecutor {
     if (isRoot) return;
     if (!password) return;
 
-    try {
-      const dir = path.join(os.homedir(), ".config", "aster");
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      fs.chmodSync(dir, 0o700);
+    const candidates = [
+      path.join(os.homedir(), ".config", "aster"),
+      path.join(path.dirname(path.resolve(this.audit.getLogPath())), ".aster-askpass"),
+    ];
 
-      const safeId = this.nodeId.replace(/[^A-Za-z0-9_-]/g, "_");
-      const file = path.join(dir, `askpass-${safeId}.sh`);
-      fs.writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' ${singleQuote(password)}\n`, { mode: 0o700 });
-      fs.chmodSync(file, 0o700);
-      this.askpassPath = file;
-    } catch (err: any) {
-      console.error(`[executor:${this.nodeId}] Gagal menyiapkan sudo askpass:`, err.message);
+    const safeId = this.nodeId.replace(/[^A-Za-z0-9_-]/g, "_");
+    let lastErr: any = null;
+    for (const dir of candidates) {
+      try {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        fs.chmodSync(dir, 0o700);
+        const file = path.join(dir, `askpass-${safeId}.sh`);
+        fs.writeFileSync(file, `#!/bin/sh\nprintf '%s\\n' ${singleQuote(password)}\n`, { mode: 0o700 });
+        fs.chmodSync(file, 0o700);
+        this.askpassPath = file;
+        return;
+      } catch (err: any) {
+        lastErr = err;
+      }
+    }
+    if (lastErr) {
+      console.error(`[executor:${this.nodeId}] Gagal menyiapkan sudo askpass:`, lastErr.message);
     }
   }
 

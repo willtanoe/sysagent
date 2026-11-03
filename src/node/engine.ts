@@ -193,6 +193,11 @@ export class NodeEngine {
       return out;
     }
 
+    if (trimmed === "__builtin:reset") {
+      this.openCode?.clearSession(ctx?.chatId ?? 0);
+      return `[${this.nodeId}] Session direset.`;
+    }
+
     // 2. Direct Ops Mode ($ <perintah>)
     if (trimmed.startsWith("$ ")) {
       const cmd = trimmed.slice(2).trim();
@@ -215,6 +220,7 @@ export class NodeEngine {
       return await this.openCode.run(trimmed, {
         chatId,
         model: modelOverride || this.defaultModel,
+        systemContext: this.buildSystemPrompt(),
         signal,
         onPartial: (partialText) => {
           onChunk(partialText);
@@ -225,6 +231,7 @@ export class NodeEngine {
         askApproval: async (command, reason) => {
           const verdict = assessRisk(command);
           const isShell = reason === "opencode: shell";
+          const isRead = reason === "opencode: read";
 
           if (verdict.level === "block") {
             this.executor.logAudit({
@@ -239,6 +246,11 @@ export class NodeEngine {
             });
             onChunk(`\n🚫 **[BLOCKED]** ${verdict.reason}: \`${command}\`\n`);
             return false;
+          }
+
+          // Auto-approve pembacaan file non-rahasia via tool read OpenCode
+          if (isRead) {
+            return true;
           }
 
           // Auto-approve untuk command shell read-only yang aman
