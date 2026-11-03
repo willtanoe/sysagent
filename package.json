@@ -1,14 +1,17 @@
 {
-  "name": "sysadmin-agent-poc",
-  "version": "0.1.0",
-  "description": "Hub + Multi-node SRE Agent Fleet Architecture PoC",
+  "name": "aster-fleet",
+  "version": "1.0.0",
+  "description": "Aster Fleet Manager — Hardened Hub + Multi-Node SRE Agent via Telegram",
   "main": "dist/hub/index.js",
   "scripts": {
     "build": "tsc",
+    "start:hub": "node dist/hub/index.js",
+    "start:node": "node dist/node/index.js",
     "hub": "tsx src/hub/index.ts",
+    "node": "tsx src/node/index.ts",
     "node:junin": "NODE_ID=junin tsx src/node/index.ts",
     "node:fubuku": "NODE_ID=fubuku tsx src/node/index.ts",
-    "test": "node tests/poc-smoke.js"
+    "test": "npm run build && node tests/poc-smoke.js"
   },
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
