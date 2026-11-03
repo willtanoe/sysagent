@@ -1,12 +1,10 @@
 [Unit]
-Description=Aster Fleet Node Agent (non-root)
+Description=Aster Fleet Node Agent (Full-Root)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=aster
-Group=aster
 WorkingDirectory=/opt/aster-fleet
 EnvironmentFile=/opt/aster-fleet/.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
@@ -17,21 +15,20 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=aster-node
 
-# --- Hardening Mode Non-Root ---
+# --- Hardening Mode Full-Root ---
 UMask=0077
 StateDirectory=aster-node
 StateDirectoryMode=0700
 ReadWritePaths=/var/lib/aster-node
 # Node agent tidak boleh memodifikasi kode dirinya sendiri
 ReadOnlyPaths=/opt/aster-fleet
+NoNewPrivileges=yes
 RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
 RemoveIPC=yes
 TasksMax=4096
 MemoryMax=2G
-# CATATAN: NoNewPrivileges sengaja TIDAK diaktifkan pada mode non-root
-# agar eskalasi terkontrol via sudo (setuid) tetap dapat berjalan saat disetujui.
 
 [Install]
 WantedBy=multi-user.target

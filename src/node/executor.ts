@@ -9,8 +9,14 @@ const MAX_BUFFER = 8 * 1024 * 1024;
 const MAX_MODEL_OUTPUT = 12_000;
 const PACKAGE_COMMAND = /\b(apt|apt-get|dpkg|dnf|yum|pacman|apk|snap|zypper|rpm|add-apt-repository)\b/;
 const SUDO_CALL = /(^|[\n;&|(]\s*)sudo(?!\s+-[An])/gm;
+const REDUNDANT_ROOT_SUDO = /(^|[\n;&|(]\s*)sudo(?:\s+-[AnEHKPSv]+)*(?=\s+(?![-]))\s+/gm;
 
 export const isRoot: boolean = typeof process.getuid === "function" && process.getuid() === 0;
+
+/** Hapus prefix sudo yang tidak mengubah target user (-u/-g) ketika proses sudah berjalan sebagai root (uid=0). */
+export function stripRedundantSudo(command: string): string {
+  return command.replace(REDUNDANT_ROOT_SUDO, "$1");
+}
 
 export interface ExecResult {
   output: string;
@@ -105,6 +111,9 @@ export class NodeExecutor {
   }
 
   private prepareCommand(command: string): string {
+    if (isRoot) {
+      return stripRedundantSudo(command);
+    }
     const flag = this.askpassPath === null ? "sudo -n" : "sudo -A";
     return command.replace(SUDO_CALL, (_match: string, prefix: string) => `${prefix}${flag}`);
   }

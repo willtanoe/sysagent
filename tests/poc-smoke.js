@@ -4,7 +4,7 @@ const path = require("path");
 const { HubServer, parseNodeTokens } = require("../dist/hub/server.js");
 const { HubStore } = require("../dist/hub/store.js");
 const { NodeClient } = require("../dist/node/client.js");
-const { NodeExecutor, sanitizeEnv } = require("../dist/node/executor.js");
+const { NodeExecutor, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
 const { NodeEngine } = require("../dist/node/engine.js");
 const { isManagedOpenCode, resolveOpenCodeBinary } = require("../dist/node/opencode-server.js");
 const { OpenCodeRunner } = require("../dist/node/opencode.js");
@@ -200,15 +200,26 @@ async function runTests() {
   assert.strictEqual(assessRisk("cat /etc/shadow").level, "block");
   assert.strictEqual(assessRisk("cat /etc/{shadow}").level, "block");
   assert.strictEqual(assessRisk("cat /etc/shad*").level, "block");
+  assert.strictEqual(assessRisk("cat /etc/ssl/private/server.key").level, "block");
+  assert.strictEqual(assessRisk("cat /etc/letsencrypt/live/domain/privkey.pem").level, "block");
+  assert.strictEqual(assessRisk("cat /etc/wireguard/wg0.conf").level, "block");
+  assert.strictEqual(assessRisk("cat /root/.kube/config").level, "block");
+  assert.strictEqual(assessRisk("cat /root/.docker/config.json").level, "block");
   assert.strictEqual(assessRisk("printenv").level, "block");
   assert.strictEqual(assessRisk("echo pass | sudo -S id").level, "block");
   assert.strictEqual(assessRisk("touch /tmp/x").level, "approve");
   assert.strictEqual(assessRisk("mkdir -p /tmp/x").level, "approve");
   assert.strictEqual(assessRisk("find /tmp -exec rm {} +").level, "approve");
   assert.strictEqual(assessRisk("/opt/custom/deploy.sh").level, "approve");
+  assert.strictEqual(assessRisk("awk '{print \"x\" > \"/etc/pwn\"}' /etc/hosts").level, "approve");
+  assert.strictEqual(assessRisk("sed 's/.*/id/e' /etc/hosts").level, "approve");
+  assert.strictEqual(assessRisk("sed 'w /tmp/pwn' /etc/hosts").level, "approve");
+  assert.strictEqual(assessRisk("awk '$1 > 2 {print $1}' /etc/hosts").level, "allow");
+  assert.strictEqual(stripRedundantSudo("sudo systemctl status nginx"), "systemctl status nginx");
+  assert.strictEqual(stripRedundantSudo("sudo -u postgres psql"), "sudo -u postgres psql");
   assert.strictEqual(isReadOnlyCommand("uname -a | grep -i linux"), true);
   assert.strictEqual(isReadOnlyCommand("echo hi > /tmp/x"), false);
-  console.log("✓ 10. Risk classifier memblokir perintah destruktif, pembacaan secret, & env leak");
+  console.log("✓ 10. Risk classifier memblokir perintah destruktif, pembacaan secret (termasuk level root), & env leak");
 
   // 11. Sanitasi Environment Child Process (Anti Secret Leak)
   process.env.TEST_SECRET_TOKEN = "rahasia-negara-123";

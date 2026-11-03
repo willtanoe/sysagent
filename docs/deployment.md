@@ -1,19 +1,16 @@
-# Panduan Deployment Server Kantor
+# Panduan Deployment Server Kantor (Mode Full-Root)
 
-Panduan ini mencakup instalasi produksi untuk **Aster Hub** (server koordinasi pusat) dan **Aster Node Agent** (di setiap server/VPS kantor yang dikelola).
+Panduan ini mencakup instalasi produksi untuk **Aster Hub** (server koordinasi pusat) dan **Aster Node Agent** (di setiap server/VPS kantor yang dikelola) dalam lingkungan **Full-Root** (seluruh server berjalan langsung sebagai `root` tanpa perlu membuat user OS tambahan).
 
 ---
 
 ## 1. Persiapan Awal (Di Hub maupun Node)
 
-Pastikan Node.js `>= 20.3` telah terpasang di server. Buat user sistem khusus `aster` dan direktori instalasi `/opt/aster-fleet`:
+Pastikan Node.js `>= 20.3` telah terpasang di server. Siapkan direktori instalasi `/opt/aster-fleet` langsung sebagai `root`:
 
 ```bash
-sudo useradd -r -m -d /home/aster -s /usr/sbin/nologin aster || true
-sudo mkdir -p /opt/aster-fleet
-sudo chown "$USER":"$USER" /opt/aster-fleet
-
-git clone git@github.com:willtanoe/sysagent.git /opt/aster-fleet
+mkdir -p /opt/aster-fleet
+git clone -b full-root git@github.com:willtanoe/sysagent.git /opt/aster-fleet
 cd /opt/aster-fleet
 npm ci
 npm run build
@@ -21,9 +18,9 @@ npm run build
 
 ---
 
-## 2. Deployment Aster Hub (Server Pusat)
+## 2. Deployment Aster Hub (VPS Pusat)
 
-Hub dapat dijalankan di satu VM internal kantor atau VPS gateway yang dapat dijangkau oleh seluruh node melalui port TCP `8765` (atau `443` di balik reverse proxy).
+Hub dijalankan di satu VPS/VM koordinasi yang dapat dijangkau oleh seluruh node melalui port TCP `8765` (atau `443` di balik reverse proxy).
 
 ### 2.1 Buat Token Autentikasi
 Buat token kriptografis acak minimal 32 byte untuk masing-masing node (disarankan) atau satu token master:
@@ -52,6 +49,8 @@ TLS_CERT_PATH=/etc/ssl/aster/fullchain.pem
 TLS_KEY_PATH=/etc/ssl/aster/privkey.pem
 
 # Konfigurasi Bot Telegram
+# CATATAN: Kosongkan TELEGRAM_BOT_TOKEN jika VPS Hub masih menunggu pembukaan akses internet
+# agar Hub berjalan dalam mode Headless WSS Coordinator untuk uji konektivitas intranet Node.
 TELEGRAM_BOT_TOKEN=123456789:ABCDEF...
 BOT_NAME=aster_kantor_bot
 ALLOWED_USER_ID=111222333,444555666
@@ -62,17 +61,16 @@ HUB_STATE_FILE=/var/lib/aster-hub/hub-state.json
 NOTIFY_NODE_EVENTS=true
 ```
 
-### 2.3 Pasang Service Systemd Hub
+### 2.3 Pasang Service Systemd Hub (Full-Root)
 ```bash
-sudo chown -R aster:aster /opt/aster-fleet
-sudo cp /opt/aster-fleet/deploy/systemd/aster-hub.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now aster-hub
+cp /opt/aster-fleet/deploy/systemd/aster-hub.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now aster-hub
 ```
 
 Verifikasi status Hub:
 ```bash
-sudo systemctl status aster-hub
+systemctl status aster-hub
 journalctl -u aster-hub -n 30 --no-pager
 ```
 
@@ -122,31 +120,27 @@ ALERT_IGNORE_UNITS=
 > **Catatan Bundled OpenCode Engine (`@opencode/cli`)**:
 > Saat `npm ci` dijalankan, paket `@opencode/cli` otomatis mengunduh binary Linux yang sesuai untuk arsitektur server (`linux-x64` / `linux-arm64`) berkat konfigurasi `allowScripts` di `package.json`. Untuk memperbarui versi binary OpenCode di kemudian hari, cukup jalankan `npm run update:opencode`.
 
-### 3.2 Pilih Varian Unit Systemd Node
+### 3.2 Pilih Varian Unit Systemd Node (Full-Root)
 
-Tersedia 3 varian unit `systemd` di `deploy/systemd/` sesuai profil keamanan server:
+Seluruh unit `systemd` di `deploy/systemd/` pada branch `full-root` telah dikonfigurasi untuk berjalan langsung sebagai `root` tanpa membutuhkan user tambahan:
 
 | File Unit | Peruntukan | Karakteristik Hardening |
 |---|---|---|
-| `aster-node.service` | **Rekomendasi Umum (Non-Root)** | Berjalan sebagai user `aster`, direktori kode `ReadOnlyPaths=/opt/aster-fleet`, mendukung eskalasi `sudo` terkontrol saat disetujui operator. |
-| `aster-node-isolated.service` | **Server Web / Multi-Tenant** | Menyembunyikan `/home`, `/var/www`, dan `/srv` (`ProtectHome=true`, `InaccessiblePaths`) agar agent hanya mengelola level sistem tanpa menyentuh kode aplikasi web. |
-| `aster-node-root.service` | **Server Khusus Root** | Berjalan sebagai `root` dengan `ReadOnlyPaths=/opt/aster-fleet` dan `NoNewPrivileges=yes`. Gunakan hanya jika server tidak memiliki user non-root. |
+| `aster-node.service` | **Default Full-Root** | Berjalan sebagai `root` di `/opt/aster-fleet` dengan `ReadOnlyPaths=/opt/aster-fleet`, `NoNewPrivileges=yes`, dan `UMask=0077`. |
+| `aster-node-isolated.service` | **Server Web / Multi-Tenant (Full-Root)** | Berjalan sebagai `root` di `/agent/aster-fleet` namun menyembunyikan `/home`, `/var/www`, dan `/srv` (`ProtectHome=true`, `InaccessiblePaths`) dari pandangan agent. |
+| `aster-node-root.service` | **Alias Identik Full-Root** | Identik dengan `aster-node.service` untuk kompatibilitas penamaan skrip otomasi. |
 
-Contoh pemasangan mode Non-Root (`aster-node.service`):
+Contoh pemasangan di server Node (`aster-node.service`):
 ```bash
-sudo chown -R aster:aster /opt/aster-fleet
-sudo cp /opt/aster-fleet/deploy/systemd/aster-node.service /etc/systemd/system/aster-node.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now aster-node
+cp /opt/aster-fleet/deploy/systemd/aster-node.service /etc/systemd/system/aster-node.service
+systemctl daemon-reload
+systemctl enable --now aster-node
 ```
 
-### 3.3 Konfigurasi Sudo untuk Mode Non-Root (Opsional)
-Agar user `aster` dapat menjalankan perintah administrasi sistem setelah Anda menekan tombol **Setujui** di Telegram tanpa menyimpan password di `.env`, tambahkan aturan `sudoers` terbatas di `/etc/sudoers.d/aster`:
-
-```sudoers
-aster ALL=(root) NOPASSWD: /usr/bin/systemctl, /usr/bin/journalctl, /usr/bin/apt-get, /usr/bin/dnf, /usr/sbin/ufw
-```
-Atau jika menggunakan `SUDO_PASSWORD` di `.env`, `NodeExecutor` otomatis membuat skrip `askpass` dengan izin `0700` di `~/.config/aster/askpass-<nodeId>.sh` (atau otomatis beralih ke `/var/lib/aster-node/.aster-askpass/askpass-<nodeId>.sh` saat berjalan dengan `ProtectHome=true` pada `aster-node-isolated.service`).
+### 3.3 Penanganan Otomatis `sudo` pada Mode Full-Root
+Karena proses Node berjalan sebagai `root` (`uid=0`), `NodeExecutor` secara otomatis:
+- Melewati pembuatan file `askpass` (`SUDO_PASSWORD` tidak diperlukan).
+- Menghapus prefix `sudo` yang redundan (`stripRedundantSudo`, misalnya `sudo systemctl status nginx` $\rightarrow$ `systemctl status nginx`) sehingga perintah tetap berjalan mulus meskipun paket `sudo` tidak terpasang di OS minimal, sembari tetap mempertahankan `sudo -u <user>` jika operator ingin menjalankan perintah sebagai user aplikasi tertentu.
 
 ---
 
@@ -156,13 +150,13 @@ Untuk memperbarui Hub maupun Node ke rilis terbaru:
 
 ```bash
 cd /opt/aster-fleet
-sudo -u aster git pull
-sudo -u aster npm ci
-sudo -u aster npm run build
-sudo -u aster npm test
+git pull
+npm ci
+npm run build
+npm test
 
 # Restart service yang sesuai di mesin tersebut:
-sudo systemctl restart aster-hub   # di server Hub
-sudo systemctl restart aster-node  # di server Node
+systemctl restart aster-hub   # di server Hub
+systemctl restart aster-node  # di server Node
 ```
-*(Catatan: karena unit systemd mengaktifkan `ReadOnlyPaths=/opt/aster-fleet`, perintah `git pull` dan `npm run build` dijalankan dari shell admin di luar proses service).*
+*(Catatan: karena unit systemd mengaktifkan `ReadOnlyPaths=/opt/aster-fleet`, perintah `git pull` dan `npm run build` dijalankan dari shell root di luar proses service).*

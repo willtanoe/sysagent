@@ -1,12 +1,10 @@
 [Unit]
-Description=Aster Fleet Node Agent (isolated, /agent)
+Description=Aster Fleet Node Agent (Full-Root Isolated, /agent)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=aster
-Group=aster
 WorkingDirectory=/agent/aster-fleet
 EnvironmentFile=/agent/aster-fleet/.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
@@ -17,12 +15,13 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=aster-node
 
-# --- Hardening Terisolasi (Server Aplikasi Web) ---
+# --- Hardening Terisolasi Full-Root (Server Aplikasi Web) ---
 UMask=0077
 StateDirectory=aster-node
 StateDirectoryMode=0700
 ReadWritePaths=/var/lib/aster-node
 ReadOnlyPaths=/agent/aster-fleet
+NoNewPrivileges=yes
 # Sembunyikan /home dan direktori aplikasi web dari pandangan agent
 ProtectHome=true
 InaccessiblePaths=-/var/www -/srv

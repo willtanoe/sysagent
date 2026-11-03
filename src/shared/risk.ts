@@ -30,7 +30,7 @@ export function isSecretAccess(raw: string): boolean {
   const cmd = raw.replace(/["'\\{}]/g, "");
 
   const SECRET =
-    /(?:^|[\s/])\.(?:env|en\?|en\*)(?!\.example\b)|(?:\/etc\/(?:g?shad(?:ow|[\w?*]*)|sudoers(?:\.d)?\b))|id_(?:rsa|ed25519|ecdsa|dsa)\b|\.ssh\/|\.config\/aster|askpass(?:[-_A-Za-z0-9.]*\.sh)?|hub-state\.json|wp-config(?:\.php)?|\.aws\/(?:credentials|config)|\.git-credentials|\.netrc|\.my\.cnf|\.pgpass|\/proc\/(?:[^\s]*\/)?envi[^\s]*/i;
+    /(?:^|[\s/])\.(?:env|en\?|en\*)(?!\.example\b)|(?:\/etc\/(?:g?shad(?:ow|[\w?*]*)|sudoers(?:\.d)?\b|ssl\/private\b|letsencrypt\/live\b|wireguard\b|openvpn\b|ipsec\.secrets\b|ppp\/[^\s]*secrets|kubernetes\/[^\s]*\.conf|rancher\/k3s\/k3s\.yaml))|id_(?:rsa|ed25519|ecdsa|dsa)\b|privkey[^\s]*\.pem\b|\.ssh\/|\.kube\/config\b|\.docker\/config\.json\b|\.config\/aster|askpass(?:[-_A-Za-z0-9.]*\.sh)?|hub-state\.json|wp-config(?:\.php)?|\.aws\/(?:credentials|config)|\.git-credentials|\.netrc|\.my\.cnf|\.pgpass|\/proc\/(?:[^\s]*\/)?envi[^\s]*/i;
 
   return SECRET.test(cmd);
 }
@@ -64,7 +64,15 @@ const BLOCKED: Rule[] = [
 
 /** Butuh konfirmasi user lewat inline keyboard. */
 const NEEDS_APPROVAL: Rule[] = [
-  { pattern: /\bsudo\b|\bdoas\b/, reason: "eksekusi dengan privilege" },
+  {
+    check: (cmd) =>
+      /\bsudo\b|\bdoas\b/.test(cmd) &&
+      (typeof process.getuid !== "function" ||
+        process.getuid() !== 0 ||
+        /\b(?:sudo|doas)\s+-[A-Za-z]*[ug]\b/.test(cmd) ||
+        !isReadOnlyCommand(cmd)),
+    reason: "eksekusi dengan privilege",
+  },
   { pattern: /\brm\b/, reason: "menghapus file" },
   { pattern: /\bmv\b/, reason: "memindahkan atau menimpa path" },
   { pattern: /\bdd\b/, reason: "operasi disk mentah" },
@@ -130,6 +138,8 @@ const NEEDS_APPROVAL: Rule[] = [
   { check: hasFileRedirection, reason: "redirection output/input ke file" },
   { pattern: /\bsed\b[^\n]*\s-i\b/, reason: "edit in-place (sed -i)" },
   { pattern: /\bperl\b[^\n]*\s-i\b/, reason: "edit in-place (perl -i)" },
+  { pattern: /\bawk\b[^\n]*\b(?:print|printf)\b[^;\n}]*(?:>>?|\|)/i, reason: "redirection/pipe output dari dalam awk" },
+  { pattern: /\bsed\b[^\n]*(?:\/[gIim]*e\b|(?:^|['";\s])w\s+\S)/i, reason: "eksekusi atau tulis file dari dalam sed" },
   // Menjalankan script/file lokal via interpreter/shell (hanya saat interpreter ada di posisi executable).
   {
     pattern: /(?:^|[;&|()]\s*|\b(?:sudo|doas|exec|nohup|time|env)\s+)\s*(?:python3?|node|perl|ruby|php|lua|bash|sh|zsh|dash|ksh)\s+[^\s-]/i,
@@ -191,8 +201,10 @@ export function isReadOnlyCommand(command: string): boolean {
   const hasMutating = (seg: string): boolean => {
     // Redirection ke file asli (bukan /dev/null atau 2>&1)
     if (hasFileRedirection(seg)) return true;
-    // In-place edits
+    // In-place edits & script-internal file writes/exec
     if (/\b(?:sed|perl)\b[^\n]*\s-i\b/i.test(seg)) return true;
+    if (/\bawk\b[^\n]*\b(?:print|printf)\b[^;\n}]*(?:>>?|\|)/i.test(seg)) return true;
+    if (/\bsed\b[^\n]*(?:\/[gIim]*e\b|(?:^|['";\s])w\s+\S)/i.test(seg)) return true;
     // Dynamic exec in scripts
     if (/\b(?:system|exec|popen|eval)\s*\(/i.test(seg)) return true;
     // Command substitution

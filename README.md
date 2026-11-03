@@ -94,11 +94,10 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 - Node.js `>= 20.3.0`.
 - Token Bot Telegram dari [@BotFather](https://t.me/BotFather) dan Telegram User ID admin.
 
-### 1. Instalasi & Build
+### 1. Instalasi & Build (Mode Full-Root)
 ```bash
-sudo mkdir -p /opt/aster-fleet
-sudo chown "$USER" /opt/aster-fleet
-git clone git@github.com:willtanoe/sysagent.git /opt/aster-fleet
+mkdir -p /opt/aster-fleet
+git clone -b full-root git@github.com:willtanoe/sysagent.git /opt/aster-fleet
 cd /opt/aster-fleet
 npm ci
 cp .env.example .env

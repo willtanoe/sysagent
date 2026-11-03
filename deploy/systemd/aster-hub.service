@@ -1,12 +1,10 @@
 [Unit]
-Description=Aster Fleet Hub Coordinator & Telegram Bot
+Description=Aster Fleet Hub Coordinator & Telegram Bot (Full-Root)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=aster
-Group=aster
 WorkingDirectory=/opt/aster-fleet
 EnvironmentFile=/opt/aster-fleet/.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
@@ -18,7 +16,7 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=aster-hub
 
-# --- Hardening Ketat (Hub tidak pernah menjalankan shell lokal) ---
+# --- Hardening Ketat (Mode Root Tanpa User Tambahan, Hub tidak pernah menjalankan shell lokal) ---
 UMask=0077
 StateDirectory=aster-hub
 StateDirectoryMode=0700

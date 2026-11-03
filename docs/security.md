@@ -37,14 +37,14 @@ Setiap perintah shell maupun permintaan akses sumber daya—baik yang diketik la
 - Penghapusan filesystem root (`rm -rf /` dan variasinya).
 - Penulisan mentah atau pemformatan *block device* (`dd of=/dev/sd*`, `mkfs.*`, redirect `> /dev/nvme*`).
 - *Fork bomb* (`:(){ :|:& };:`).
-- Pembacaan atau akses ke file rahasia/kredensial (`isSecretAccess` dengan normalisasi anti-*obfuscation* terhadap tanda kutip, *backslash* `\`, kurung kurawal `{}`, dan *glob*): `.env`, `/etc/shadow` (`/etc/shad*`), `/etc/gshadow`, `/etc/sudoers`, kunci privat SSH (`id_rsa`, `id_ed25519`, `.ssh/`), `.aws/credentials`, `.git-credentials`, `.netrc`, `.pgpass`, `.my.cnf`, `wp-config.php`, `hub-state.json`, `/proc/*/environ`, serta skrip internal `.config/aster` / `askpass`.
+- Pembacaan atau akses ke file rahasia/kredensial (`isSecretAccess` dengan normalisasi anti-*obfuscation* terhadap tanda kutip, *backslash* `\`, kurung kurawal `{}`, dan *glob*): `.env`, `/etc/shadow` (`/etc/shad*`), `/etc/gshadow`, `/etc/sudoers`, kunci privat SSH (`id_rsa`, `id_ed25519`, `.ssh/`), kunci privat TLS/VPN/Kubernetes/Docker level `root` (`/etc/ssl/private`, `/etc/letsencrypt/live`, `privkey*.pem`, `/etc/wireguard`, `/etc/openvpn`, `/etc/ipsec.secrets`, `/etc/ppp/*secrets`, `.kube/config`, `/etc/kubernetes/*.conf`, `/etc/rancher/k3s/k3s.yaml`, `.docker/config.json`), `.aws/credentials`, `.git-credentials`, `.netrc`, `.pgpass`, `.my.cnf`, `wp-config.php`, `hub-state.json`, `/proc/*/environ`, serta skrip internal `.config/aster` / `askpass`.
 - Kebocoran *environment* (`printenv`, `compgen`, `env`, `set`, `declare`, `export` tanpa argumen).
 - Penyuntikan password via *stdin* (`sudo -S`, `echo ... | sudo`).
 - Penghapusan jejak histori (`history -c`, `unset HISTFILE`, `rm .bash_history`).
 
 ### B. Kategori `approve` (Wajib Konfirmasi Tombol Inline Telegram)
-- Eskalasi *privilege* (`sudo`, `doas`).
-- Penghapusan, pembuatan, pemindahan, penyalinan, arsip, atau pengubahan atribut file (`rm`, `rmdir`, `mkdir`, `touch`, `mktemp`, `mv`, `cp`, `install`, `ln`, `shred`, `truncate`, `fallocate`, `chmod`, `chown`, `chattr`, `setfacl`, `setfattr`, `tar`, `zip`, `unzip`, `gzip`, `gunzip`, `bzip2`, `xz`, `patch`, `find -delete/-exec/-execdir/-ok`, `sed -i`, `perl -i`, `tee`, serta segala bentuk *file redirection* `>` / `>>`).
+- Eskalasi *privilege* (`sudo`, `doas`; pada mode `root`, prefix `sudo` redundan tanpa `-u`/`-g` otomatis di-*strip* oleh `stripRedundantSudo` sehingga perintah *read-only* tidak terblokir oleh ketiadaan paket `sudo`).
+- Penghapusan, pembuatan, pemindahan, penyalinan, arsip, atau pengubahan atribut file (`rm`, `rmdir`, `mkdir`, `touch`, `mktemp`, `mv`, `cp`, `install`, `ln`, `shred`, `truncate`, `fallocate`, `chmod`, `chown`, `chattr`, `setfacl`, `setfattr`, `tar`, `zip`, `unzip`, `gzip`, `gunzip`, `bzip2`, `xz`, `patch`, `find -delete/-exec/-execdir/-ok`, `sed -i`, `sed '.../e'`, `sed 'w file'`, `awk '{print > "file"}'`, `perl -i`, `tee`, serta segala bentuk *file redirection* `>` / `>>`).
 - Manajemen layanan & daya (`systemctl start|stop|restart|reload|enable|disable|mask`, `service`, `reboot`, `shutdown`, `kill`, `pkill`, `killall`).
 - Manajemen paket & kode pihak ketiga (`apt`, `dpkg`, `dnf`, `yum`, `rpm`, `pacman`, `apk`, `zypper`, `npm install`, `pip install`, `cargo`, `go get`).
 - Konfigurasi jaringan, firewall, & kernel (`iptables`, `nft`, `ufw`, `firewall-cmd`, `nmcli`, `sysctl -w`, `modprobe`, `insmod`, `mount`, `umount`, `fdisk`, `parted`).
