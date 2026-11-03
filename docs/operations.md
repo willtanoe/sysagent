@@ -9,7 +9,7 @@ Dokumen ini merupakan panduan operasional harian bagi tim Sysadmin / SRE dalam m
 - **Melihat Daftar Server Online**:
   Kirim `/nodes` untuk melihat seluruh server yang sedang terhubung ke Hub beserta informasi hostname, distro OS, *load average*, sisa RAM, dan *uptime*. Anda dapat menekan tombol nama node di bawah pesan untuk langsung memilihnya.
 - **Memilih Node Aktif**:
-  Kirim `/use <nodeId>` (misal `/use srv-kantor-01`). Pilihan ini disimpan secara persisten untuk ruang chat Anda hingga Anda menggantinya atau mengirim `/unuse`.
+  Kirim `/use <nodeId>` (misal `/use hongyun`). Pilihan ini disimpan secara persisten untuk ruang chat Anda hingga Anda menggantinya atau mengirim `/unuse`.
 - **Dashboard Kesehatan (`/status`)**:
   - `/status`: Menampilkan dashboard monospace bergaya netdata untuk node yang sedang aktif (mencakup *progress bar* RAM & Disk, trafik jaringan RX/TX, jumlah proses & port TCP, daftar service `systemd`, `pm2`, serta proses dengan CPU tertinggi).
   - `/status <nodeId>`: Menampilkan dashboard detail untuk node tertentu tanpa harus mengubah node aktif.
@@ -69,7 +69,7 @@ Untuk memastikan file log audit lokal di suatu node tidak pernah dimodifikasi at
 ```
 atau untuk node tertentu:
 ```text
-/auditcheck srv-kantor-01
+/auditcheck hongyun
 ```
 Node akan menghitung ulang rantai hash SHA-256 dari entri pertama (`GENESIS`) hingga entri terakhir dan melaporkan jumlah baris yang terverifikasi utuh (atau nomor baris pertama yang rusak bila terjadi manipulasi).
 

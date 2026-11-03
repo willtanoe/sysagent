@@ -15,7 +15,7 @@ const { markdownToHtml, chunkHtml } = require("../dist/shared/format.js");
 
 const PORT = 9876;
 const SECRET_TOKEN = "test-secret-prod-1234567890";
-const JUNIN_TOKEN = "junin-specific-token-999";
+const HONGYUN_TOKEN = "hongyun-specific-token-999";
 
 async function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,15 +24,15 @@ async function sleep(ms) {
 async function runTests() {
   console.log("=== ASTER FLEET PRODUCTION SMOKE & SECURITY TEST SUITE ===");
 
-  const auditJunin = path.join("/tmp", "audit-junin-test.jsonl");
-  const auditFubuku = path.join("/tmp", "audit-fubuku-test.jsonl");
+  const auditHongyun = path.join("/tmp", "audit-hongyun-test.jsonl");
+  const auditHongchen = path.join("/tmp", "audit-hongchen-test.jsonl");
   const statePath = path.join("/tmp", "hub-state-test.json");
-  fs.rmSync(auditJunin, { force: true });
-  fs.rmSync(auditFubuku, { force: true });
+  fs.rmSync(auditHongyun, { force: true });
+  fs.rmSync(auditHongchen, { force: true });
   fs.rmSync(statePath, { force: true });
 
   // 1. Hub Start dengan Master Token & Per-Node Token
-  const nodeTokens = parseNodeTokens(`junin:${JUNIN_TOKEN}`);
+  const nodeTokens = parseNodeTokens(`hongyun:${HONGYUN_TOKEN}`);
   const hub = new HubServer(PORT, SECRET_TOKEN, {
     host: "127.0.0.1",
     nodeTokens,
@@ -55,96 +55,96 @@ async function runTests() {
   fs.rmSync("/tmp/bad.jsonl", { force: true });
   console.log("✓ 2. Autentikasi token salah ditolak oleh Hub (constant-time SHA-256 verification)");
 
-  // 3. Node Junin (pakai per-node token) & Fubuku (pakai master token) Konek
-  const execJunin = new NodeExecutor("junin", auditJunin);
-  const engineJunin = new NodeEngine("junin", execJunin);
-  const clientJunin = new NodeClient(
-    { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "junin", token: JUNIN_TOKEN, reconnectDelayMs: 300 },
-    engineJunin
+  // 3. Node Hongyun (pakai per-node token) & Hongchen (pakai master token) Konek
+  const execHongyun = new NodeExecutor("hongyun", auditHongyun);
+  const engineHongyun = new NodeEngine("hongyun", execHongyun);
+  const clientHongyun = new NodeClient(
+    { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "hongyun", token: HONGYUN_TOKEN, reconnectDelayMs: 300 },
+    engineHongyun
   );
 
-  const execFubuku = new NodeExecutor("fubuku", auditFubuku);
-  const engineFubuku = new NodeEngine("fubuku", execFubuku);
-  const clientFubuku = new NodeClient(
-    { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "fubuku", token: SECRET_TOKEN, reconnectDelayMs: 300 },
-    engineFubuku
+  const execHongchen = new NodeExecutor("hongchen", auditHongchen);
+  const engineHongchen = new NodeEngine("hongchen", execHongchen);
+  const clientHongchen = new NodeClient(
+    { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "hongchen", token: SECRET_TOKEN, reconnectDelayMs: 300 },
+    engineHongchen
   );
 
-  clientJunin.start();
-  clientFubuku.start();
+  clientHongyun.start();
+  clientHongchen.start();
   await sleep(500);
 
   const nodes = hub.listNodes();
   assert.strictEqual(nodes.length, 2, "Harus ada 2 node terdaftar");
   const nodeIds = nodes.map((n) => n.nodeId).sort();
-  assert.deepStrictEqual(nodeIds, ["fubuku", "junin"]);
-  console.log("✓ 3. Node 'junin' (per-node token) dan 'fubuku' (master token) terdaftar:", nodeIds.join(", "));
+  assert.deepStrictEqual(nodeIds, ["hongchen", "hongyun"]);
+  console.log("✓ 3. Node 'hongyun' (per-node token) dan 'hongchen' (master token) terdaftar:", nodeIds.join(", "));
 
   // 4. Metadata & Distro Detection
-  const nodeJ = hub.getNode("junin");
-  const nodeF = hub.getNode("fubuku");
-  assert.ok(nodeJ && nodeJ.info.hostname && nodeJ.info.distro, "Metadata & distro junin lengkap");
-  assert.ok(nodeF && nodeF.info.hostname && nodeF.info.distro, "Metadata & distro fubuku lengkap");
+  const nodeHy = hub.getNode("hongyun");
+  const nodeHc = hub.getNode("hongchen");
+  assert.ok(nodeHy && nodeHy.info.hostname && nodeHy.info.distro, "Metadata & distro hongyun lengkap");
+  assert.ok(nodeHc && nodeHc.info.hostname && nodeHc.info.distro, "Metadata & distro hongchen lengkap");
   console.log(
-    `✓ 4. Metadata fleet & distro: host=${nodeJ.info.hostname}, distro=${nodeJ.info.distro.name} (${nodeJ.info.distro.packageManager})`
+    `✓ 4. Metadata fleet & distro: host=${nodeHy.info.hostname}, distro=${nodeHy.info.distro.name} (${nodeHy.info.distro.packageManager})`
   );
 
-  // 5. Eksekusi perintah aman di Junin ($ uptime)
-  let juninChunks = "";
-  let juninDone = false;
-  hub.startRun("junin", 1001, "$ uptime", {
+  // 5. Eksekusi perintah aman di Hongyun ($ uptime)
+  let hongyunChunks = "";
+  let hongyunDone = false;
+  hub.startRun("hongyun", 1001, "$ uptime", {
     onChunk: (c) => {
-      juninChunks += c;
+      hongyunChunks += c;
     },
     onApprovalReq: () => {
       assert.fail("uptime tidak boleh minta approval");
     },
     onDone: (res) => {
-      juninDone = true;
-      assert.ok(res.includes("[junin]"), "Output harus beridentitas junin");
+      hongyunDone = true;
+      assert.ok(res.includes("[hongyun]"), "Output harus beridentitas hongyun");
     },
   });
 
   await sleep(500);
-  assert.ok(juninDone, "Run di junin harus selesai");
-  assert.ok(juninChunks.length > 0, "Harus menerima streaming chunks");
-  console.log("✓ 5. Eksekusi terisolasi di node 'junin' sukses");
+  assert.ok(hongyunDone, "Run di hongyun harus selesai");
+  assert.ok(hongyunChunks.length > 0, "Harus menerima streaming chunks");
+  console.log("✓ 5. Eksekusi terisolasi di node 'hongyun' sukses");
 
-  // 6. Eksekusi perintah aman di Fubuku ($ whoami)
-  let fubukuDone = false;
-  hub.startRun("fubuku", 1001, "$ whoami", {
+  // 6. Eksekusi perintah aman di Hongchen ($ whoami)
+  let hongchenDone = false;
+  hub.startRun("hongchen", 1001, "$ whoami", {
     onChunk: () => {},
     onApprovalReq: () => {
       assert.fail("whoami tidak boleh minta approval");
     },
     onDone: (res) => {
-      fubukuDone = true;
-      assert.ok(res.includes("[fubuku]"), "Output harus beridentitas fubuku");
+      hongchenDone = true;
+      assert.ok(res.includes("[hongchen]"), "Output harus beridentitas hongchen");
     },
   });
 
   await sleep(500);
-  assert.ok(fubukuDone, "Run di fubuku harus selesai");
-  console.log("✓ 6. Eksekusi terisolasi di node 'fubuku' sukses");
+  assert.ok(hongchenDone, "Run di hongchen harus selesai");
+  console.log("✓ 6. Eksekusi terisolasi di node 'hongchen' sukses");
 
   // 7. Audit logging lokal independen, permission 0600, & verifikasi rantai hash
-  assert.ok(fs.existsSync(auditJunin), "audit junin harus ada");
-  assert.ok(fs.existsSync(auditFubuku), "audit fubuku harus ada");
-  const modeJ = fs.statSync(auditJunin).mode & 0o777;
-  assert.strictEqual(modeJ, 0o600, "File audit wajib memiliki permission 0600");
-  const verifyJ = execJunin.verifyAudit();
-  assert.strictEqual(verifyJ.ok, true, "Audit chain junin harus valid");
-  assert.strictEqual(verifyJ.total, 1);
+  assert.ok(fs.existsSync(auditHongyun), "audit hongyun harus ada");
+  assert.ok(fs.existsSync(auditHongchen), "audit hongchen harus ada");
+  const modeHy = fs.statSync(auditHongyun).mode & 0o777;
+  assert.strictEqual(modeHy, 0o600, "File audit wajib memiliki permission 0600");
+  const verifyHy = execHongyun.verifyAudit();
+  assert.strictEqual(verifyHy.ok, true, "Audit chain hongyun harus valid");
+  assert.strictEqual(verifyHy.total, 1);
   console.log("✓ 7. Audit log per-node independen, mode 0600, & hash-chain terverifikasi");
 
-  // 8. Command Berisiko di Junin: Tolak oleh Operator via Hub
+  // 8. Command Berisiko di Hongyun: Tolak oleh Operator via Hub
   let approvalReqReceived = false;
-  hub.startRun("junin", 1001, "$ systemctl restart nginx", {
+  hub.startRun("hongyun", 1001, "$ systemctl restart nginx", {
     onChunk: () => {},
     onApprovalReq: (approvalId, cmd) => {
       approvalReqReceived = true;
       assert.strictEqual(cmd, "systemctl restart nginx");
-      hub.sendApproval("junin", "fake", approvalId, false);
+      hub.sendApproval("hongyun", "fake", approvalId, false);
     },
     onDone: (res) => {
       assert.ok(res.includes("[REJECTED]"), "Harus ada notif REJECTED");
@@ -155,13 +155,13 @@ async function runTests() {
   assert.ok(approvalReqReceived, "Approval request harus sampai ke Hub");
   console.log("✓ 8. Approval bridge: penolakan operator berhasil diteruskan ke node");
 
-  // 9. Command Berisiko di Junin: Setujui oleh Operator via Hub
+  // 9. Command Berisiko di Hongyun: Setujui oleh Operator via Hub
   let approvalApprovedReceived = false;
-  hub.startRun("junin", 1001, "$ cp /etc/hostname /tmp/aster-hostname-test", {
+  hub.startRun("hongyun", 1001, "$ cp /etc/hostname /tmp/aster-hostname-test", {
     onChunk: () => {},
     onApprovalReq: (approvalId) => {
       approvalApprovedReceived = true;
-      hub.sendApproval("junin", "fake", approvalId, true);
+      hub.sendApproval("hongyun", "fake", approvalId, true);
     },
     onDone: (res) => {
       assert.ok(!res.includes("[REJECTED]"), "Tidak boleh ditolak");
@@ -175,7 +175,7 @@ async function runTests() {
 
   // 10. Command Bahaya & Akses File Rahasia (Block list)
   let blockRunDone = false;
-  hub.startRun("fubuku", 1001, "$ rm -rf /", {
+  hub.startRun("hongchen", 1001, "$ rm -rf /", {
     onChunk: () => {},
     onApprovalReq: () => {
       assert.fail("rm -rf / harus diblok tanpa minta approval");
@@ -200,7 +200,7 @@ async function runTests() {
   process.env.TEST_SECRET_TOKEN = "rahasia-negara-123";
   const sanitized = sanitizeEnv(process.env);
   assert.strictEqual(sanitized.TEST_SECRET_TOKEN, undefined, "Variabel SECRET/TOKEN harus dihapus dari child env");
-  const envCheckRes = await execJunin.runCommand("echo ${TEST_SECRET_TOKEN:-kosong}");
+  const envCheckRes = await execHongyun.runCommand("echo ${TEST_SECRET_TOKEN:-kosong}");
   assert.strictEqual(envCheckRes.output.trim(), "kosong", "Shell anak tidak boleh bisa membaca secret env");
   delete process.env.TEST_SECRET_TOKEN;
   console.log("✓ 11. Sanitasi environment child process mencegah kebocoran token/password");
@@ -210,7 +210,7 @@ async function runTests() {
   assert.ok(!redacted.includes("my-secret-jwt") && !redacted.includes("supersecret") && !redacted.includes("12345"));
 
   let auditCheckOut = "";
-  hub.startRun("junin", 1001, "__builtin:auditcheck", {
+  hub.startRun("hongyun", 1001, "__builtin:auditcheck", {
     onChunk: () => {},
     onApprovalReq: () => {},
     onDone: (res) => {
@@ -223,7 +223,7 @@ async function runTests() {
 
   // 13. Built-in Status Dashboard (__builtin:status)
   let statusOut = "";
-  hub.startRun("junin", 1001, "__builtin:status", {
+  hub.startRun("hongyun", 1001, "__builtin:status", {
     onChunk: () => {},
     onApprovalReq: () => {},
     onDone: (res) => {
@@ -236,7 +236,7 @@ async function runTests() {
 
   // 14. Pembatalan Tugas (/stop -> hub_cancel -> kill process tree)
   let cancelErr = "";
-  hub.startRun("fubuku", 2002, "$ sleep 30", {
+  hub.startRun("hongchen", 2002, "$ sleep 30", {
     onChunk: () => {},
     onApprovalReq: () => {},
     onDone: (_res, err) => {
@@ -253,14 +253,14 @@ async function runTests() {
   // 15. Proactive Alert Forwarding dari Node ke Hub
   let receivedAlertHtml = "";
   hub.once("node_alert", (nodeId, key, severity, html) => {
-    if (nodeId === "junin" && key === "disk" && severity === "warn") {
+    if (nodeId === "hongyun" && key === "disk" && severity === "warn") {
       receivedAlertHtml = html;
     }
   });
   const alertState = new Map();
   const evalAlert = createNodeAlertEvaluator({
-    nodeId: "junin",
-    send: (ev) => clientJunin.sendAlert(ev.key, ev.severity, ev.html),
+    nodeId: "hongyun",
+    send: (ev) => clientHongyun.sendAlert(ev.key, ev.severity, ev.html),
     get: (k) => alertState.get(k) ?? null,
     set: (k, v) => (v === null ? alertState.delete(k) : alertState.set(k, v)),
     now: Date.now,
@@ -282,7 +282,7 @@ async function runTests() {
 
   // 16. AI Tool-Calling Loop (Engine Local) dengan Stubbed OpenAI Client
   let callTurn = 0;
-  engineFubuku.setClientForTest({
+  engineHongchen.setClientForTest({
     chat: {
       completions: {
         create: async () => {
@@ -328,7 +328,7 @@ async function runTests() {
 
   let aiAnswer = "";
   let aiUsage = null;
-  hub.startRun("fubuku", 1001, "Cek respons echo", {
+  hub.startRun("hongchen", 1001, "Cek respons echo", {
     onChunk: () => {},
     onApprovalReq: () => {},
     onDone: (res, _err, usage) => {
@@ -421,14 +421,14 @@ async function runTests() {
 
   // 18. HubStore Persistence & HTML Chunking
   const store = new HubStore(statePath);
-  store.setActiveNode(1001, "junin");
-  store.remember(1001, "junin", "cek uptime", "Server nyala 10 hari");
+  store.setActiveNode(1001, "hongyun");
+  store.remember(1001, "hongyun", "cek uptime", "Server nyala 10 hari");
   store.addUsage(1001, { promptTokens: 100, completionTokens: 50 });
   store.flush();
 
   const storeReloaded = new HubStore(statePath);
-  assert.strictEqual(storeReloaded.getActiveNode(1001), "junin");
-  assert.strictEqual(storeReloaded.getHistory(1001, "junin").length, 2);
+  assert.strictEqual(storeReloaded.getActiveNode(1001), "hongyun");
+  assert.strictEqual(storeReloaded.getHistory(1001, "hongyun").length, 2);
   assert.strictEqual(storeReloaded.getUsage(1001).promptTokens, 100);
 
   const htmlChunks = chunkHtml(markdownToHtml("```bash\n" + "a".repeat(5000) + "\n```"), 2000);
@@ -437,29 +437,29 @@ async function runTests() {
   console.log("✓ 18. Persistensi HubStore (mode 0600) & HTML chunking aman terverifikasi");
 
   // 19. Disconnect & Reconnect Otomatis
-  clientJunin.stop();
+  clientHongyun.stop();
   await sleep(350);
-  assert.strictEqual(hub.listNodes().length, 1, "Tersisa 1 node setelah junin disconnect");
-  assert.strictEqual(hub.listNodes()[0].nodeId, "fubuku");
+  assert.strictEqual(hub.listNodes().length, 1, "Tersisa 1 node setelah hongyun disconnect");
+  assert.strictEqual(hub.listNodes()[0].nodeId, "hongchen");
   console.log("✓ 19. Deteksi disconnect node realtime");
 
-  clientJunin.start();
+  clientHongyun.start();
   await sleep(500);
   assert.strictEqual(hub.listNodes().length, 2, "2 node kembali online setelah reconnect");
   console.log("✓ 20. Reconnect otomatis node sukses");
 
   // 21. Deteksi Kerusakan Rantai Audit (Tamper Detection)
-  fs.appendFileSync(auditJunin, '{"ts":"2026-01-01","nodeId":"junin","command":"hack","prevHash":" SALAH","hash":"123"}\n');
-  const tamperedVerify = execJunin.verifyAudit();
+  fs.appendFileSync(auditHongyun, '{"ts":"2026-01-01","nodeId":"hongyun","command":"hack","prevHash":" SALAH","hash":"123"}\n');
+  const tamperedVerify = execHongyun.verifyAudit();
   assert.strictEqual(tamperedVerify.ok, false, "Audit verifier harus mendeteksi baris yang dimanipulasi");
   console.log("✓ 21. Tamper-detection mendeteksi manipulasi file audit pada baris ke-" + tamperedVerify.brokenAt);
 
   // Cleanup
-  clientJunin.stop();
-  clientFubuku.stop();
+  clientHongyun.stop();
+  clientHongchen.stop();
   await hub.stop();
-  fs.rmSync(auditJunin, { force: true });
-  fs.rmSync(auditFubuku, { force: true });
+  fs.rmSync(auditHongyun, { force: true });
+  fs.rmSync(auditHongchen, { force: true });
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");

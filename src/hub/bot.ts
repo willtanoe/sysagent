@@ -327,7 +327,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     if (!target) {
       await sendFormatted(
         ctx,
-        "⚠️ Format: <code>/use &lt;nama_node&gt;</code>\nContoh: <code>/use junin</code>",
+        "⚠️ Format: <code>/use &lt;nama_node&gt;</code>\nContoh: <code>/use hongyun</code>",
         "html"
       );
       return;

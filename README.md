@@ -23,7 +23,7 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
             │ (Outbound WSS)                            │ (Outbound WSS)
             │                                           │
 ┌───────────┴───────────────┐               ┌───────────┴───────────────┐
-│   Node: srv-kantor-01     │               │   Node: srv-db-02         │
+│   Node: hongyun           │               │   Node: hongchen          │
 │  • Outbound WSS Client    │               │  • Outbound WSS Client    │
 │  • AI SRE Agent / Shell   │               │  • AI SRE Agent / Shell   │
 │  • 3-Tier Risk Classifier │               │  • 3-Tier Risk Classifier │
@@ -119,7 +119,7 @@ Menjalankan 21 skenario pengujian tanpa ketergantungan jaringan luar: autentikas
   ```
 - **Menjalankan Node Agent**:
   ```bash
-  NODE_ID=srv-kantor-01 npm run start:node
+  NODE_ID=hongyun npm run start:node
   ```
 
 Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfigurasi *multi-server*), lihat panduan lengkap di **[docs/deployment.md](docs/deployment.md)**.

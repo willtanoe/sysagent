@@ -48,7 +48,7 @@ export function verifySecretToken(provided: string, expected: string): boolean {
   return crypto.timingSafeEqual(hashA, hashB);
 }
 
-/** Parse string "junin:tok1,fubuku:tok2" menjadi map token per-node. */
+/** Parse string "hongyun:tok1,hongchen:tok2" menjadi map token per-node. */
 export function parseNodeTokens(raw: string | undefined): Record<string, string> {
   const map: Record<string, string> = {};
   if (!raw) return map;

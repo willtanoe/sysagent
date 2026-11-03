@@ -9,8 +9,8 @@
     "start:node": "node dist/node/index.js",
     "hub": "tsx src/hub/index.ts",
     "node": "tsx src/node/index.ts",
-    "node:junin": "NODE_ID=junin tsx src/node/index.ts",
-    "node:fubuku": "NODE_ID=fubuku tsx src/node/index.ts",
+    "node:hongyun": "NODE_ID=hongyun tsx src/node/index.ts",
+    "node:hongchen": "NODE_ID=hongchen tsx src/node/index.ts",
     "test": "npm run build && node tests/poc-smoke.js",
     "update:opencode": "npm install --save-exact @opencode/cli@latest && npm run build"
   },

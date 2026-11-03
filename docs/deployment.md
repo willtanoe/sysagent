@@ -45,7 +45,7 @@ HUB_PORT=8765
 HUB_TOKEN=token_master_acak_minimal_32_byte
 
 # Opsional (Disarankan): Token spesifik per-node
-NODE_TOKENS=srv-web-01:token_khusus_web01,srv-db-01:token_khusus_db01
+NODE_TOKENS=hongyun:token_khusus_hongyun,hongchen:token_khusus_hongchen
 
 # Opsional: Aktifkan TLS langsung di Hub (jika tidak memakai Nginx/Caddy di depannya)
 TLS_CERT_PATH=/etc/ssl/aster/fullchain.pem
@@ -90,10 +90,10 @@ chmod 600 /opt/aster-fleet/.env
 
 Isi konfigurasi Node di `.env`:
 ```env
-NODE_ID=srv-web-01
+NODE_ID=hongyun
 HUB_URL=wss://hub.kantor.internal:8765
-NODE_TOKEN=token_khusus_web01
-AUDIT_PATH=/var/lib/aster-node/audit-srv-web-01.jsonl
+NODE_TOKEN=token_khusus_hongyun
+AUDIT_PATH=/var/lib/aster-node/audit-hongyun.jsonl
 
 # Jika Hub menggunakan sertifikat CA internal kantor:
 TLS_CA_PATH=/etc/ssl/certs/kantor-root-ca.crt
