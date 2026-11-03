@@ -77,20 +77,28 @@ sequenceDiagram
 
 ---
 
-## 4. Built-in RPC & AI Tool-Calling Loop (`src/node/engine.ts`)
+## 4. Dual-Engine AI (`ENGINE=opencode` & `ENGINE=local`) serta Built-in RPC (`src/node/engine.ts`)
 
-`NodeEngine` menangani tiga jalur eksekusi:
+`NodeEngine` menangani empat jalur eksekusi di setiap node:
+
 1. **Built-in RPC**:
    - `__builtin:status`: Mengumpulkan 14 metrik sistem secara paralel (`status.ts`) dan merender dashboard monospace bergaya netdata tanpa memicu AI atau mengotori log audit perintah operator.
    - `__builtin:auditcheck`: Memverifikasi seluruh baris pada file `audit-<nodeId>.jsonl` dari hash `GENESIS` hingga baris terakhir dan melaporkan keutuhan rantai SHA-256.
+   - `__builtin:models`: Mengambil daftar model gratis (`freeModels`) dari daemon OpenCode pada node aktif untuk ditampilkan saat operator memanggil `/model`.
 2. **Direct Shell Mode (`$ <cmd>` atau `/exec <cmd>`)**:
-   - Mengeksekusi perintah langsung melalui `NodeExecutor.runCommand` dengan penilaian risiko dan *approval gate*.
-3. **AI SRE Mode**:
-   - Menyusun *system prompt* yang dilengkapi informasi distro Linux (`distroContext()`) dan status *privilege* (`isRoot`).
+   - Mengeksekusi perintah langsung melalui `NodeExecutor.runCommand` dengan penilaian risiko (`assessRisk`) dan *approval gate*.
+3. **Bundled OpenCode Engine Mode (`ENGINE=opencode` — Default)**:
+   - Menggunakan paket resmi `@opencode/cli` yang telah dibundel di `node_modules/@opencode/cli`.
+   - Saat node hidup dan `OPENCODE_URL` kosong, `ManagedOpenCodeServer` (`src/node/opencode-server.ts`) otomatis mencari port bebas di `127.0.0.1`, menghasilkan password acak 24-byte (`OPENCODE_SERVER_PASSWORD`), dan menjalankan `opencode serve` dengan konfigurasi `permission: { bash: "ask", edit: "ask", write: "ask" }`.
+   - `OpenCodeRunner` (`src/node/opencode.ts`) mengelola sesi per `chatId`, menyuntikkan konteks distro Linux + hak akses (`root`/`non-root`) di pesan pertama sesi, memulihkan sesi secara otomatis jika terjadi ketidakcocokan `reasoning_content` saat berganti model, dan menangkap event SSE `permission.asked`.
+   - Setiap permintaan izin dari OpenCode dinilai oleh `assessRisk`:
+     - `block`: Langsung ditolak (`reject`) dan dicatat ke audit log node.
+     - `allow` (perintah *read-only*): Otomatis diizinkan (`once`) dan dicatat ke audit log node tanpa mengganggu operator.
+     - `approve` (perintah mutasi / edit file): Mengirim `node_approval_req` ke Hub sehingga tombol **Setujui / Tolak** muncul di Telegram.
+4. **Local AI Gateway Mode (`ENGINE=local`)**:
+   - Menyusun *system prompt* yang dilengkapi informasi distro Linux (`distroContext()`) dan status *privilege* (`isRoot`), lalu memanggil endpoint kompatibel OpenAI (`GATEWAY_URL`).
    - Menyertakan riwayat percakapan ringkas per `(chatId, nodeId)` yang dikirim dari `HubStore`.
-   - Mencegah pengulangan perintah identik lebih dari 2 kali dalam satu siklus.
-   - Jika pengguna meminta tindakan perbaikan (*action intent*), membatasi jumlah pembacaan berturut-turut (`MAX_READ_ONLY_STEPS`) agar agen fokus menyelesaikan masalah.
-   - Mendukung rantai *fallback* model (`MODEL_NAME` $\rightarrow$ `MODEL_FALLBACK`).
+   - Mencegah pengulangan perintah identik lebih dari 2 kali dalam satu siklus dan mendukung rantai *fallback* model (`MODEL_NAME` $\rightarrow$ `MODEL_FALLBACK`).
 
 ---
 

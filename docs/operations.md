@@ -37,9 +37,13 @@ Seluruh perintah berikut dijalankan pada node yang sedang aktif di chat Anda:
 1. **Shell Langsung (`$ <perintah>` atau `/exec <perintah>`)**:
    Gunakan awalan `$ ` (contoh: `$ uptime` atau `$ systemctl restart redis`) ketika Anda sudah tahu persis perintah yang ingin dijalankan tanpa melalui penalaran LLM. Perintah tetap melewati *Risk Classifier* dan *Approval Gate*.
 2. **Konsultasi & Investigasi AI (`/chat <prompt>` atau teks biasa)**:
-   Gunakan untuk investigasi bertahap (contoh: *"Cek kenapa penggunaan disk di /var penuh dan bersihkan log journal yang lebih tua dari 7 hari"*). Agen AI akan menjalankan perintah inspeksi *read-only* secara mandiri dan meminta persetujuan tombol inline sebelum menjalankan perintah pembersihan/perubahan.
-3. **Menghentikan Tugas (`/stop`)**:
-   Jika suatu perintah atau sesi AI berjalan terlalu lama, kirim `/stop`. Hub akan mengirim sinyal `hub_cancel` ke node untuk membatalkan loop AI dan membunuh seluruh *process group* shell (`SIGKILL`).
+   Gunakan untuk investigasi bertahap (contoh: *"Cek kenapa penggunaan disk di /var penuh dan bersihkan log journal yang lebih tua dari 7 hari"*). Baik dalam mode default `ENGINE=opencode` (bundled `@opencode/cli`) maupun `ENGINE=local`, agen AI akan menjalankan perintah inspeksi *read-only* secara mandiri dan meminta persetujuan tombol inline sebelum menjalankan perintah pembersihan/perubahan.
+3. **Mengganti Model AI (`/model`)**:
+   - Kirim `/model` tanpa argumen untuk melihat model aktif saat ini beserta daftar model gratis yang tersedia dari engine OpenCode di node aktif (misal `opencode/glm-5.3-flash-free`, `opencode/minimax-m2.5-free`, dll.).
+   - Kirim `/model <provider/model>` untuk mengganti model pada sesi chat ini (otomatis membuat sesi OpenCode baru agar terhindar dari konflik riwayat `reasoning_content`).
+   - Kirim `/model reset` untuk kembali ke model default node.
+4. **Menghentikan Tugas (`/stop`)**:
+   Jika suatu perintah atau sesi AI berjalan terlalu lama, kirim `/stop`. Hub akan mengirim sinyal `hub_cancel` ke node untuk membatalkan sesi OpenCode / loop AI dan membunuh seluruh *process group* shell (`SIGKILL`).
 
 ---
 

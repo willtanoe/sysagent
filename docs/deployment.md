@@ -99,7 +99,14 @@ AUDIT_PATH=/var/lib/aster-node/audit-srv-web-01.jsonl
 TLS_CA_PATH=/etc/ssl/certs/kantor-root-ca.crt
 TLS_REJECT_UNAUTHORIZED=true
 
-# Opsional: Kredensial AI Gateway untuk fitur /chat di node ini
+# Mode Engine AI di Node: "opencode" (default, menggunakan binary bundled @opencode/cli) atau "local"
+ENGINE=opencode
+# Kosongkan OPENCODE_URL agar node otomatis menyalakan daemon bundled @opencode/cli di 127.0.0.1
+OPENCODE_URL=
+OPENCODE_BIN=
+OPENCODE_MODEL=opencode/glm-5.3-flash-free
+
+# Opsional: Kredensial AI Gateway jika menggunakan ENGINE=local
 GATEWAY_URL=https://gateway.asteria.im/v1
 GATEWAY_API_KEY=sk-...
 MODEL_NAME=ag/gemini-3.8-flash
@@ -111,6 +118,9 @@ ALERT_DISK_PCT=90
 ALERT_MEM_PCT=92
 ALERT_IGNORE_UNITS=
 ```
+
+> **Catatan Bundled OpenCode Engine (`@opencode/cli`)**:
+> Saat `npm ci` dijalankan, paket `@opencode/cli` otomatis mengunduh binary Linux yang sesuai untuk arsitektur server (`linux-x64` / `linux-arm64`) berkat konfigurasi `allowScripts` di `package.json`. Untuk memperbarui versi binary OpenCode di kemudian hari, cukup jalankan `npm run update:opencode`.
 
 ### 3.2 Pilih Varian Unit Systemd Node
 
