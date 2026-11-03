@@ -328,6 +328,22 @@ export class NodeExecutor {
     return this.audit.verify();
   }
 
+  logAudit(entry: {
+    command: string;
+    exitCode: number | null;
+    durationMs: number;
+    risk: string;
+    approved: boolean;
+    outputPreview?: string;
+    chatId?: number;
+    userId?: number;
+  }): void {
+    this.audit.log({
+      nodeId: this.nodeId,
+      ...entry,
+    });
+  }
+
   getAuditPath(): string {
     return this.audit.getLogPath();
   }

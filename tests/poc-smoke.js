@@ -6,6 +6,8 @@ const { HubStore } = require("../dist/hub/store.js");
 const { NodeClient } = require("../dist/node/client.js");
 const { NodeExecutor, sanitizeEnv } = require("../dist/node/executor.js");
 const { NodeEngine } = require("../dist/node/engine.js");
+const { isManagedOpenCode, resolveOpenCodeBinary } = require("../dist/node/opencode-server.js");
+const { OpenCodeRunner } = require("../dist/node/opencode.js");
 const { createNodeAlertEvaluator } = require("../dist/node/alerts.js");
 const { assessRisk, isReadOnlyCommand } = require("../dist/shared/risk.js");
 const { redactSecrets } = require("../dist/shared/audit.js");
@@ -234,7 +236,7 @@ async function runTests() {
 
   // 14. Pembatalan Tugas (/stop -> hub_cancel -> kill process tree)
   let cancelErr = "";
-  const slowRunId = hub.startRun("fubuku", 2002, "$ sleep 30", {
+  hub.startRun("fubuku", 2002, "$ sleep 30", {
     onChunk: () => {},
     onApprovalReq: () => {},
     onDone: (_res, err) => {
@@ -278,7 +280,7 @@ async function runTests() {
   assert.ok(receivedAlertHtml.includes("95%"), "Hub harus menerima alert proaktif disk dari node");
   console.log("✓ 15. Evaluator & forwarding alert proaktif dari Node ke Hub bekerja akurat");
 
-  // 16. AI Tool-Calling Loop dengan Stubbed OpenAI Client
+  // 16. AI Tool-Calling Loop (Engine Local) dengan Stubbed OpenAI Client
   let callTurn = 0;
   engineFubuku.setClientForTest({
     chat: {
@@ -337,9 +339,87 @@ async function runTests() {
   await sleep(500);
   assert.ok(aiAnswer.includes("halo-dari-ai"), "AI loop harus mengeksekusi tool dan merangkum hasil");
   assert.strictEqual(aiUsage.promptTokens, 120);
-  console.log("✓ 16. Loop AI tool-calling & pelacakan token usage bekerja sempurna");
+  console.log("✓ 16. Loop AI tool-calling (engine=local) & pelacakan token usage bekerja sempurna");
 
-  // 17. HubStore Persistence & HTML Chunking
+  // 17. Bundled OpenCode Engine (@opencode/cli resolution, session management, recovery, & permission bridge)
+  assert.strictEqual(isManagedOpenCode("opencode", ""), true);
+  assert.strictEqual(isManagedOpenCode("opencode", "http://127.0.0.1:4199"), false);
+  assert.strictEqual(isManagedOpenCode("local", ""), false);
+  const resolvedBin = resolveOpenCodeBinary();
+  assert.ok(resolvedBin.includes("@opencode/cli"), `Binary @opencode/cli harus terbundel, dapat: ${resolvedBin}`);
+
+  const ocRunner = new OpenCodeRunner({
+    url: "http://oc.test",
+    password: "test-password",
+    defaultModel: "opencode/glm-5.3-flash-free",
+    pollMs: 50,
+  });
+  const realFetch = global.fetch;
+  const ocCalls = [];
+  const jsonResp = (body, status = 200) => new Response(JSON.stringify(body), { status });
+  const sseResp = (sessionID, textDelta) => {
+    const enc = new TextEncoder();
+    const lines = [
+      { type: "session.text.delta", data: { sessionID, delta: textDelta } },
+      { type: "session.execution.succeeded", data: { sessionID } },
+    ]
+      .map((e) => `data: ${JSON.stringify(e)}\n`)
+      .join("");
+    return new Response(
+      new ReadableStream({
+        start(c) {
+          c.enqueue(enc.encode(lines));
+          c.close();
+        },
+      })
+    );
+  };
+
+  ocRunner.setSession(777, "ses_bad");
+  let recoveredCount = 0;
+  global.fetch = async (url, init = {}) => {
+    const p = String(url).replace("http://oc.test", "");
+    const m = init.method ?? "GET";
+    ocCalls.push(`${m} ${p}`);
+    if (p === "/api/session/ses_bad" && m === "GET") {
+      return jsonResp({ model: { providerID: "opencode", id: "glm-5.3-flash-free" } });
+    }
+    if (p === "/api/session/ses_bad/prompt" && m === "POST") {
+      return jsonResp({ error: "Missing required parameter: 'messages[4].reasoning_content'" }, 400);
+    }
+    if (p === "/api/session" && m === "POST") {
+      return jsonResp({ id: "ses_fresh" });
+    }
+    if (p === "/api/event") {
+      return sseResp("ses_fresh", "OpenCode berhasil pulih dan menjawab!");
+    }
+    if (p === "/api/session/ses_fresh/prompt" && m === "POST") {
+      return jsonResp({});
+    }
+    if (p.endsWith("/permission")) {
+      return jsonResp({ data: [] });
+    }
+    return jsonResp({});
+  };
+
+  try {
+    const ocReply = await ocRunner.run("cek server via opencode", {
+      chatId: 777,
+      onPartial: () => {},
+      askApproval: async () => true,
+      onRecover: () => {
+        recoveredCount += 1;
+      },
+    });
+    assert.strictEqual(ocReply, "OpenCode berhasil pulih dan menjawab!");
+    assert.strictEqual(recoveredCount, 1, "Harus otomatis recovery saat terkena reasoning_content error");
+    assert.strictEqual(ocRunner.getSession(777), "ses_fresh");
+  } finally {
+    global.fetch = realFetch;
+  }
+  console.log("✓ 17. Bundled OpenCode Engine (@opencode/cli binary, session & reasoning_content recovery) lulus");
+
+  // 18. HubStore Persistence & HTML Chunking
   const store = new HubStore(statePath);
   store.setActiveNode(1001, "junin");
   store.remember(1001, "junin", "cek uptime", "Server nyala 10 hari");
@@ -354,25 +434,25 @@ async function runTests() {
   const htmlChunks = chunkHtml(markdownToHtml("```bash\n" + "a".repeat(5000) + "\n```"), 2000);
   assert.ok(htmlChunks.length >= 3, "Pesan panjang harus dipecah menjadi beberapa chunk");
   assert.ok(htmlChunks[0].endsWith("</code></pre>"), "Setiap chunk pre harus ditutup dengan aman");
-  console.log("✓ 17. Persistensi HubStore (mode 0600) & HTML chunking aman terverifikasi");
+  console.log("✓ 18. Persistensi HubStore (mode 0600) & HTML chunking aman terverifikasi");
 
-  // 18. Disconnect & Reconnect Otomatis
+  // 19. Disconnect & Reconnect Otomatis
   clientJunin.stop();
   await sleep(350);
   assert.strictEqual(hub.listNodes().length, 1, "Tersisa 1 node setelah junin disconnect");
   assert.strictEqual(hub.listNodes()[0].nodeId, "fubuku");
-  console.log("✓ 18. Deteksi disconnect node realtime");
+  console.log("✓ 19. Deteksi disconnect node realtime");
 
   clientJunin.start();
   await sleep(500);
   assert.strictEqual(hub.listNodes().length, 2, "2 node kembali online setelah reconnect");
-  console.log("✓ 19. Reconnect otomatis node sukses");
+  console.log("✓ 20. Reconnect otomatis node sukses");
 
-  // 20. Deteksi Kerusakan Rantai Audit (Tamper Detection)
+  // 21. Deteksi Kerusakan Rantai Audit (Tamper Detection)
   fs.appendFileSync(auditJunin, '{"ts":"2026-01-01","nodeId":"junin","command":"hack","prevHash":" SALAH","hash":"123"}\n');
   const tamperedVerify = execJunin.verifyAudit();
   assert.strictEqual(tamperedVerify.ok, false, "Audit verifier harus mendeteksi baris yang dimanipulasi");
-  console.log("✓ 20. Tamper-detection mendeteksi manipulasi file audit pada baris ke-" + tamperedVerify.brokenAt);
+  console.log("✓ 21. Tamper-detection mendeteksi manipulasi file audit pada baris ke-" + tamperedVerify.brokenAt);
 
   // Cleanup
   clientJunin.stop();
@@ -383,7 +463,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 20 TEST PRODUKSI & KEAMANAN ASTER FLEET LULUS 100%!");
+  console.log("SEMUA 21 TEST PRODUKSI, OPENCODE BUNDLE, & KEAMANAN LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

@@ -2,8 +2,9 @@ import OpenAI from "openai";
 import { NodeExecutor, RequestApprovalFn, truncateForModel, isRoot } from "./executor";
 import { distroContext } from "./distro";
 import { buildNodeStatusText } from "./status";
-import { assessRisk } from "../shared/risk";
+import { assessRisk, isReadOnlyCommand } from "../shared/risk";
 import { ChatHistoryItem, TokenUsage } from "../shared/protocol";
+import { OpenCodeRunner, OpenCodeConfig } from "./opencode";
 
 export const ABORTED = "ABORTED";
 
@@ -11,6 +12,8 @@ const ACTION_INTENT =
   /\b(terapkan|apply|benerin|perbaiki|fix|hapus|hapusin|pasang|install|uninstall|restart|stop|start|enable|disable|ubah|ganti|update|upgrade|deploy|rollback|matiin|nyalain|jalanin|jalankan|eksekusi|buatkan|tambahkan|tambahin)\b/i;
 
 export interface EngineOptions {
+  engineMode?: "opencode" | "local";
+  openCode?: OpenCodeConfig | OpenCodeRunner;
   apiKey?: string;
   baseURL?: string;
   model?: string;
@@ -31,6 +34,8 @@ export interface RunContext {
 
 export class NodeEngine {
   private executor: NodeExecutor;
+  private engineMode: "opencode" | "local";
+  private openCode?: OpenCodeRunner;
   private openai?: OpenAI;
   private defaultModel: string;
   private fallbackModels: string[];
@@ -43,7 +48,15 @@ export class NodeEngine {
   constructor(nodeId: string, executor: NodeExecutor, opts?: EngineOptions) {
     this.nodeId = nodeId;
     this.executor = executor;
-    this.defaultModel = opts?.model || process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash";
+    const rawMode = (opts?.engineMode || process.env.ENGINE || "local").toLowerCase();
+    this.engineMode = rawMode === "opencode" ? "opencode" : "local";
+
+    this.defaultModel =
+      opts?.model ||
+      (this.engineMode === "opencode"
+        ? process.env.OPENCODE_MODEL || "opencode/glm-5.3-flash-free"
+        : process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash");
+
     this.fallbackModels =
       opts?.fallbackModels ??
       (process.env.MODEL_FALLBACK || "")
@@ -55,6 +68,21 @@ export class NodeEngine {
     this.maxReadOnlySteps = opts?.maxReadOnlySteps ?? 6;
     this.statusServices = opts?.statusServices ?? [];
 
+    if (opts?.openCode instanceof OpenCodeRunner) {
+      this.openCode = opts.openCode;
+    } else if (opts?.openCode) {
+      this.openCode = new OpenCodeRunner(opts.openCode);
+    } else if (this.engineMode === "opencode") {
+      this.openCode = new OpenCodeRunner({
+        url: process.env.OPENCODE_URL || "",
+        password: process.env.OPENCODE_PASSWORD || "",
+        defaultModel: this.defaultModel,
+        workDir: process.env.OPENCODE_DIR || "/",
+        timeoutMs: Number(process.env.OPENCODE_TIMEOUT_MS) || 900_000,
+        pollMs: Number(process.env.OPENCODE_POLL_MS) || 700,
+      });
+    }
+
     const key = opts?.apiKey || process.env.GATEWAY_API_KEY || process.env.OPENAI_API_KEY;
     const base = opts?.baseURL || process.env.GATEWAY_URL || process.env.GATEWAY_BASE_URL || process.env.OPENAI_BASE_URL;
 
@@ -64,6 +92,23 @@ export class NodeEngine {
         baseURL: base,
       });
     }
+  }
+
+  /** Set endpoint OpenCode setelah ManagedOpenCodeServer selesai start. */
+  setOpenCodeEndpoint(url: string, password: string): void {
+    if (!this.openCode) {
+      this.openCode = new OpenCodeRunner({
+        url,
+        password,
+        defaultModel: this.defaultModel,
+      });
+    } else {
+      this.openCode.setEndpoint(url, password);
+    }
+  }
+
+  getOpenCodeRunner(): OpenCodeRunner | undefined {
+    return this.openCode;
   }
 
   /** Test helper untuk menyuntikkan mock OpenAI client pada unit test. */
@@ -127,9 +172,30 @@ export class NodeEngine {
       return out;
     }
 
-    // 2. Direct Ops Mode ($ <perintah> atau jika LLM tidak dikonfigurasi)
-    if (!this.openai || trimmed.startsWith("$ ")) {
-      const cmd = trimmed.startsWith("$ ") ? trimmed.slice(2).trim() : trimmed;
+    if (trimmed === "__builtin:models") {
+      if (this.engineMode === "opencode" && this.openCode) {
+        const list = await this.openCode.listModels();
+        const shown = list.slice(0, 40);
+        const more = list.length - shown.length;
+        const out =
+          `🤖 **Daftar Model (${this.nodeId} · engine=opencode)**\n` +
+          `Default: \`${this.defaultModel}\`\n` +
+          `\`\`\`text\n${shown.join("\n")}\n\`\`\`` +
+          (more > 0 ? `\n*...dan ${more} model lainnya*` : "");
+        onChunk(out);
+        return out;
+      }
+      const list = this.modelChain(modelOverride);
+      const out =
+        `🤖 **Daftar Model (${this.nodeId} · engine=local)**\n` +
+        `\`\`\`text\n${list.join("\n")}\n\`\`\``;
+      onChunk(out);
+      return out;
+    }
+
+    // 2. Direct Ops Mode ($ <perintah>)
+    if (trimmed.startsWith("$ ")) {
+      const cmd = trimmed.slice(2).trim();
       onChunk(`[${this.nodeId}] ⚙️ \`${cmd}\`...\n`);
       const res = await this.executor.runCommand(cmd, requestApproval, undefined, signal, {
         chatId: ctx?.chatId,
@@ -141,7 +207,88 @@ export class NodeEngine {
       return `[${this.nodeId}]\n${out}`;
     }
 
-    // 3. AI SRE Agent Mode dengan Tool Calling
+    // 3. Engine OpenCode (Bundled / External `opencode serve`)
+    if (this.engineMode === "opencode" && this.openCode) {
+      const chatId = ctx?.chatId ?? 0;
+      const userId = ctx?.userId;
+
+      return await this.openCode.run(trimmed, {
+        chatId,
+        model: modelOverride || this.defaultModel,
+        signal,
+        onPartial: (partialText) => {
+          onChunk(partialText);
+        },
+        onRecover: () => {
+          onChunk(`\n♻️ *Riwayat session lama tidak kompatibel dengan model ini, memulai session baru...*\n`);
+        },
+        askApproval: async (command, reason) => {
+          const verdict = assessRisk(command);
+          const isShell = reason === "opencode: shell";
+
+          if (verdict.level === "block") {
+            this.executor.logAudit({
+              command,
+              exitCode: 126,
+              durationMs: 0,
+              risk: "block",
+              approved: false,
+              outputPreview: verdict.reason,
+              chatId,
+              userId,
+            });
+            onChunk(`\n🚫 **[BLOCKED]** ${verdict.reason}: \`${command}\`\n`);
+            return false;
+          }
+
+          // Auto-approve untuk command shell read-only yang aman
+          if (isShell && (verdict.level === "allow" || (verdict.level === "approve" && isReadOnlyCommand(command)))) {
+            this.executor.logAudit({
+              command,
+              exitCode: 0,
+              durationMs: 0,
+              risk: "allow",
+              approved: true,
+              outputPreview: "opencode auto-allow",
+              chatId,
+              userId,
+            });
+            onChunk(`\n⚙️ \`${command}\`\n`);
+            return true;
+          }
+
+          return requestApproval(command, reason);
+        },
+        onPermission: (permission, approved) => {
+          const cmd = `${permission.action}: ${permission.resources.join(" ; ")}`;
+          this.executor.logAudit({
+            command: cmd,
+            exitCode: approved ? 0 : 125,
+            durationMs: 0,
+            risk: approved ? "approve" : "deny",
+            approved,
+            outputPreview: "opencode permission",
+            chatId,
+            userId,
+          });
+        },
+      });
+    }
+
+    // 4. Fallback ke Direct Shell jika mode local tapi tidak ada LLM key
+    if (!this.openai) {
+      onChunk(`[${this.nodeId}] ⚙️ \`${trimmed}\`...\n`);
+      const res = await this.executor.runCommand(trimmed, requestApproval, undefined, signal, {
+        chatId: ctx?.chatId,
+        userId: ctx?.userId,
+      });
+      if (res.aborted) throw new Error(ABORTED);
+      const out = `\`\`\`text\n${res.output}\n\`\`\`\n*(exit ${res.exitCode}, ${res.durationMs}ms)*`;
+      onChunk(out);
+      return `[${this.nodeId}]\n${out}`;
+    }
+
+    // 5. AI SRE Agent Mode (Local OpenAI-compatible Endpoint)
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       {
         role: "system",

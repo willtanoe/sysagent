@@ -4,6 +4,7 @@ import { NodeExecutor, isRoot } from "./executor";
 import { NodeEngine } from "./engine";
 import { NodeClient } from "./client";
 import { NodeAlertMonitor } from "./alerts";
+import { isManagedOpenCode, ManagedOpenCodeServer } from "./opencode-server";
 
 dotenv.config();
 
@@ -23,15 +24,12 @@ const nodeId = process.env.NODE_ID || "node-default";
 const hubUrl = process.env.HUB_URL || "ws://127.0.0.1:8765";
 const hubToken = process.env.NODE_TOKEN || process.env.HUB_TOKEN || "";
 const auditPath = process.env.AUDIT_PATH || path.join(process.cwd(), `audit-${nodeId}.jsonl`);
+const engineMode = (process.env.ENGINE || "local").toLowerCase() === "opencode" ? "opencode" : "local";
 
 if (!hubToken) {
   console.error("[fatal] HUB_TOKEN atau NODE_TOKEN wajib diisi di .env sebelum menjalankan node agent.");
   process.exit(1);
 }
-
-console.log(
-  `[boot] Memulai Aster Node Agent: id="${nodeId}" uid=${process.getuid?.() ?? "?"} root=${isRoot}`
-);
 
 const executor = new NodeExecutor(nodeId, auditPath, {
   sudoPassword: process.env.SUDO_PASSWORD,
@@ -41,7 +39,11 @@ const executor = new NodeExecutor(nodeId, auditPath, {
 });
 
 const engine = new NodeEngine(nodeId, executor, {
-  model: process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash",
+  engineMode,
+  model:
+    engineMode === "opencode"
+      ? process.env.OPENCODE_MODEL || "opencode/glm-5.3-flash-free"
+      : process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash",
   fallbackModels: listEnv(process.env.MODEL_FALLBACK),
   apiKey: process.env.GATEWAY_API_KEY || process.env.OPENAI_API_KEY,
   baseURL: process.env.GATEWAY_URL || process.env.GATEWAY_BASE_URL || process.env.OPENAI_BASE_URL,
@@ -52,6 +54,7 @@ const engine = new NodeEngine(nodeId, executor, {
 });
 
 let clientRef: NodeClient | null = null;
+let managedOpenCode: ManagedOpenCodeServer | null = null;
 
 const alertMonitor = new NodeAlertMonitor(
   nodeId,
@@ -81,13 +84,43 @@ const client = new NodeClient(
 );
 clientRef = client;
 
-client.start();
+async function main() {
+  const bundled = isManagedOpenCode(engineMode, process.env.OPENCODE_URL);
+  console.log(
+    `[boot] Memulai Aster Node Agent: id="${nodeId}" uid=${process.getuid?.() ?? "?"} root=${isRoot} engine=${engineMode}${engineMode === "opencode" ? (bundled ? "(bundled)" : "(external)") : ""}`
+  );
 
+  if (bundled) {
+    const defaultDataDir = path.join(path.dirname(path.resolve(auditPath)), `opencode-${nodeId}`);
+    managedOpenCode = new ManagedOpenCodeServer({
+      bin: process.env.OPENCODE_BIN,
+      port: intEnv(process.env.OPENCODE_PORT, 0),
+      password: process.env.OPENCODE_PASSWORD,
+      dataDir: process.env.OPENCODE_DATA_DIR || defaultDataDir,
+    });
+    const { url, password } = await managedOpenCode.start();
+    engine.setOpenCodeEndpoint(url, password);
+  }
+
+  client.start();
+}
+
+let stopping = false;
 const shutdown = (signal: string) => {
+  if (stopping) return;
+  stopping = true;
   console.log(`\n[stop] Signal ${signal} diterima, menghentikan node ${nodeId}...`);
   client.stop();
-  process.exit(0);
+  void Promise.allSettled([managedOpenCode ? managedOpenCode.stop() : Promise.resolve()]).finally(() =>
+    process.exit(0)
+  );
+  setTimeout(() => process.exit(0), 6000).unref();
 };
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+main().catch((err) => {
+  console.error(`[fatal:${nodeId}] Gagal memulai node agent:`, err);
+  process.exit(1);
+});

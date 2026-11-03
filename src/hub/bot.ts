@@ -491,6 +491,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const arg = (ctx.match ?? "").trim();
     const currentOverride = hubStore.getModelOverride(ctx.chat.id);
     const activeModel = currentOverride || defaultModel;
+    const currentNode = hubStore.getActiveNode(ctx.chat.id);
 
     if (!arg) {
       await sendFormatted(
@@ -501,6 +502,9 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           `Kembali ke default: <code>/model reset</code>`,
         "html"
       );
+      if (currentNode && hub.getNode(currentNode)) {
+        await executeOnNode(ctx, currentNode, "__builtin:models");
+      }
       return;
     }
 

@@ -11,10 +11,12 @@
     "node": "tsx src/node/index.ts",
     "node:junin": "NODE_ID=junin tsx src/node/index.ts",
     "node:fubuku": "NODE_ID=fubuku tsx src/node/index.ts",
-    "test": "npm run build && node tests/poc-smoke.js"
+    "test": "npm run build && node tests/poc-smoke.js",
+    "update:opencode": "npm install --save-exact @opencode/cli@latest && npm run build"
   },
   "dependencies": {
     "@grammyjs/runner": "^2.0.3",
+    "@opencode/cli": "2.2.5",
     "dotenv": "^16.4.5",
     "grammy": "^1.36.0",
     "openai": "^4.78.0",
@@ -29,5 +31,8 @@
   "private": true,
   "engines": {
     "node": ">=20.3"
+  },
+  "allowScripts": {
+    "@opencode/cli": true
   }
 }
