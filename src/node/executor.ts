@@ -18,6 +18,43 @@ export function stripRedundantSudo(command: string): string {
   return command.replace(REDUNDANT_ROOT_SUDO, "$1");
 }
 
+/**
+ * Deteksi apakah eksekusi shell perlu masuk ke namespace PID 1 host VPS menggunakan `nsenter`:
+ * - `HOST_NSENTER=true|1`: paksa aktif
+ * - `HOST_NSENTER=false|0`: paksa nonaktif
+ * - `HOST_NSENTER=auto` (default): aktif otomatis jika berjalan di dalam container (`/.dockerenv` atau `/run/.containerenv`)
+ *   dengan `--pid=host --privileged` (mount namespace `/proc/self/ns/mnt` berbeda dari `/proc/1/ns/mnt`).
+ */
+export function shouldUseHostNsenter(rawMode?: string): boolean {
+  const mode = (rawMode ?? process.env.HOST_NSENTER ?? "auto").trim().toLowerCase();
+  if (mode === "true" || mode === "1" || mode === "yes") return true;
+  if (mode === "false" || mode === "0" || mode === "no") return false;
+
+  try {
+    const inContainer = fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv");
+    if (!inContainer) return false;
+    const selfMnt = fs.readlinkSync("/proc/self/ns/mnt");
+    const pid1Mnt = fs.readlinkSync("/proc/1/ns/mnt");
+    return Boolean(selfMnt && pid1Mnt && selfMnt !== pid1Mnt);
+  } catch {
+    return false;
+  }
+}
+
+/** Bangun executable dan argumen spawn untuk eksekusi langsung atau via `nsenter -t 1`. */
+export function buildSpawnSpec(preparedCommand: string, hostNsenter: boolean): { file: string; args: string[] } {
+  if (hostNsenter) {
+    return {
+      file: "nsenter",
+      args: ["-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "/bin/bash", "-c", preparedCommand],
+    };
+  }
+  return {
+    file: "/bin/bash",
+    args: ["-c", preparedCommand],
+  };
+}
+
 export interface ExecResult {
   output: string;
   exitCode: number;
@@ -34,6 +71,7 @@ export interface ExecutorOptions {
   shellTimeoutMs?: number;
   packageTimeoutMs?: number;
   maxCommandsPerMinute?: number;
+  hostNsenter?: boolean;
 }
 
 export type RequestApprovalFn = (command: string, reason: string) => Promise<boolean>;
@@ -67,6 +105,7 @@ export class NodeExecutor {
   private shellTimeoutMs: number;
   private packageTimeoutMs: number;
   private maxCommandsPerMinute: number;
+  private hostNsenter: boolean;
   private executionTimestamps: number[] = [];
 
   constructor(nodeId: string, auditPath: string, opts?: ExecutorOptions) {
@@ -75,10 +114,15 @@ export class NodeExecutor {
     this.shellTimeoutMs = Math.min(opts?.shellTimeoutMs ?? 120_000, 1_800_000);
     this.packageTimeoutMs = Math.min(opts?.packageTimeoutMs ?? 900_000, 1_800_000);
     this.maxCommandsPerMinute = opts?.maxCommandsPerMinute ?? 30;
+    this.hostNsenter = opts?.hostNsenter ?? shouldUseHostNsenter();
 
     if (opts?.sudoPassword) {
       this.initSudo(opts.sudoPassword);
     }
+  }
+
+  isHostNsenter(): boolean {
+    return this.hostNsenter;
   }
 
   initSudo(password: string): void {
@@ -163,7 +207,8 @@ export class NodeExecutor {
         env.SUDO_ASKPASS_REQUIRE = "force";
       }
 
-      const child = spawn("/bin/bash", ["-c", prepared], {
+      const spec = buildSpawnSpec(prepared, this.hostNsenter);
+      const child = spawn(spec.file, spec.args, {
         env,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],

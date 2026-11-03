@@ -4,7 +4,13 @@ const path = require("path");
 const { HubServer, parseNodeTokens } = require("../dist/hub/server.js");
 const { HubStore } = require("../dist/hub/store.js");
 const { NodeClient } = require("../dist/node/client.js");
-const { NodeExecutor, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
+const {
+  NodeExecutor,
+  sanitizeEnv,
+  stripRedundantSudo,
+  shouldUseHostNsenter,
+  buildSpawnSpec,
+} = require("../dist/node/executor.js");
 const { NodeEngine } = require("../dist/node/engine.js");
 const { isManagedOpenCode, resolveOpenCodeBinary } = require("../dist/node/opencode-server.js");
 const { OpenCodeRunner } = require("../dist/node/opencode.js");
@@ -217,6 +223,13 @@ async function runTests() {
   assert.strictEqual(assessRisk("awk '$1 > 2 {print $1}' /etc/hosts").level, "allow");
   assert.strictEqual(stripRedundantSudo("sudo systemctl status nginx"), "systemctl status nginx");
   assert.strictEqual(stripRedundantSudo("sudo -u postgres psql"), "sudo -u postgres psql");
+  assert.strictEqual(shouldUseHostNsenter("true"), true);
+  assert.strictEqual(shouldUseHostNsenter("false"), false);
+  const directSpec = buildSpawnSpec("uptime", false);
+  assert.strictEqual(directSpec.file, "/bin/bash");
+  const nsenterSpec = buildSpawnSpec("systemctl status nginx", true);
+  assert.strictEqual(nsenterSpec.file, "nsenter");
+  assert.deepStrictEqual(nsenterSpec.args.slice(0, 8), ["-t", "1", "-m", "-u", "-i", "-n", "-p", "--"]);
   assert.strictEqual(isReadOnlyCommand("uname -a | grep -i linux"), true);
   assert.strictEqual(isReadOnlyCommand("echo hi > /tmp/x"), false);
   console.log("✓ 10. Risk classifier memblokir perintah destruktif, pembacaan secret (termasuk level root), & env leak");

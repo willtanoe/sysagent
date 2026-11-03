@@ -130,6 +130,11 @@ export class NodeEngine {
             "- PROSES INI BERJALAN SEBAGAI ROOT. Setiap perintah berisiko berdampak langsung ke sistem. Bersikap konservatif dan jelaskan dampak sebelum mengubah konfigurasi.",
           ]
         : []),
+      ...(this.executor.isHostNsenter()
+        ? [
+            "- Agen berjalan di dalam container dengan jembatan nsenter PID 1 langsung ke OS host VPS. Selalu gunakan tool shell/execute_shell untuk membaca atau memodifikasi file di host VPS.",
+          ]
+        : []),
       "Aturan:",
       "- Selalu verifikasi fakta dengan tool execute_shell sebelum menyimpulkan. Jangan mengarang output.",
       "- Perintah berisiko akan meminta konfirmasi operator. Jika ditolak, jangan ulangi perintah yang sama.",

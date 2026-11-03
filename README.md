@@ -76,10 +76,12 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 │       ├── status.ts          # Generator dashboard monospace bergaya netdata
 │       ├── alerts.ts          # Monitor proaktif Disk, RAM, & failed systemd units
 │       └── distro.ts          # Deteksi distro Linux (/etc/os-release) & package manager
-├── deploy/systemd/            # Unit systemd produksi (Hub, Node non-root, root, isolated)
+├── deploy/systemd/            # Unit systemd produksi (Full-Root & Isolated)
+├── Dockerfile                 # Multi-stage Docker image (Hub & Node dengan nsenter)
+├── docker-compose.yml         # Profile deployment Docker untuk Hub (--profile hub) & Node (--profile node)
 ├── docs/                      # Dokumentasi lengkap arsitektur, deploy, keamanan, & operasi
 ├── tests/
-│   └── poc-smoke.js           # 21 skenario pengujian otomatis end-to-end, OpenCode, & keamanan
+│   └── poc-smoke.js           # 21 skenario pengujian otomatis end-to-end, OpenCode, nsenter, & keamanan
 ├── .env.example               # Template konfigurasi Hub & Node
 ├── .npmrc                     # Konfigurasi npm (omit=optional) untuk instalasi lintas platform
 └── package.json
@@ -111,17 +113,22 @@ npm test
 ```
 Menjalankan 21 skenario pengujian tanpa ketergantungan jaringan luar: autentikasi token master & per-node, eksekusi multi-node terisolasi, *approval gate*, pemblokiran perintah destruktif, sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`), pembatalan proses (`/stop`), *proactive alert*, integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), dan *auto-reconnect*.
 
-### 3. Menjalankan Hub & Node
-- **Menjalankan Hub**:
+### 3. Menjalankan Hub & Node (Systemd atau Docker)
+- **Via Docker Compose (Tanpa Install Node.js di VPS Host)**:
+  ```bash
+  # Di VPS Hub (Container Terisolasi):
+  docker compose --profile hub up -d --build
+
+  # Di VPS Node Target (Host-Namespace + Auto-nsenter ke PID 1 VPS):
+  NODE_ID=hongyun docker compose --profile node up -d --build
+  ```
+- **Via Node.js / Systemd Langsung di Host**:
   ```bash
   npm run start:hub
-  ```
-- **Menjalankan Node Agent**:
-  ```bash
   NODE_ID=hongyun npm run start:node
   ```
 
-Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfigurasi *multi-server*), lihat panduan lengkap di **[docs/deployment.md](docs/deployment.md)**.
+Untuk pemasangan permanen menggunakan `Docker Compose` maupun `systemd` (termasuk TLS/WSS dan konfigurasi *multi-server*), lihat panduan lengkap di **[docs/deployment.md](docs/deployment.md)**.
 
 ---
 

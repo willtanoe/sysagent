@@ -1,0 +1,55 @@
+services:
+  # ==========================================================================
+  # 1. ASTER HUB (Dijalankan di VPS Pusat — Container Terisolasi)
+  # Jalankan: docker compose --profile hub up -d --build
+  # ==========================================================================
+  aster-hub:
+    build: .
+    image: aster-fleet:latest
+    container_name: aster-hub
+    profiles: ["hub"]
+    restart: unless-stopped
+    command: ["node", "dist/hub/index.js"]
+    env_file:
+      - .env
+    environment:
+      - HUB_HOST=0.0.0.0
+      - HUB_PORT=${HUB_PORT:-8765}
+      - HUB_STATE_FILE=/var/lib/aster-hub/hub-state.json
+    ports:
+      - "${HUB_PORT:-8765}:${HUB_PORT:-8765}"
+    volumes:
+      - aster-hub-data:/var/lib/aster-hub
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+
+  # ==========================================================================
+  # 2. ASTER NODE AGENT (Dijalankan di tiap VPS Target — Host Namespace + nsenter)
+  # Jalankan: docker compose --profile node up -d --build
+  # ==========================================================================
+  aster-node:
+    build: .
+    image: aster-fleet:latest
+    container_name: aster-node-${NODE_ID:-hongyun}
+    profiles: ["node"]
+    restart: unless-stopped
+    command: ["node", "dist/node/index.js"]
+    network_mode: host
+    pid: host
+    ipc: host
+    uts: host
+    privileged: true
+    env_file:
+      - .env
+    environment:
+      - HOST_NSENTER=${HOST_NSENTER:-auto}
+      - AUDIT_PATH=/var/lib/aster-node/audit-${NODE_ID:-hongyun}.jsonl
+    volumes:
+      - aster-node-data:/var/lib/aster-node
+
+volumes:
+  aster-hub-data:
+  aster-node-data:

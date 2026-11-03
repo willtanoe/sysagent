@@ -3,7 +3,7 @@ import { randomBytes } from "crypto";
 import * as fs from "fs";
 import { createServer } from "net";
 import * as path from "path";
-import { sanitizeEnv } from "./executor";
+import { sanitizeEnv, shouldUseHostNsenter } from "./executor";
 
 const READY_TIMEOUT_MS = 60_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -105,6 +105,17 @@ export class ManagedOpenCodeServer {
       XDG_CONFIG_HOME: configDir,
       OPENCODE_DISABLE_AUTOUPDATE: "1",
     };
+
+    if (shouldUseHostNsenter()) {
+      const hostShell = path.join(dataDir, "host-bash.sh");
+      fs.writeFileSync(
+        hostShell,
+        "#!/bin/sh\nexec nsenter -t 1 -m -u -i -n -p -- /bin/bash \"$@\"\n",
+        { mode: 0o700 }
+      );
+      fs.chmodSync(hostShell, 0o700);
+      env.SHELL = hostShell;
+    }
 
     const bin = resolveOpenCodeBinary(this.opts.bin);
     const proc = spawn(bin, ["serve", "--hostname", "127.0.0.1", "--port", String(this.port)], {

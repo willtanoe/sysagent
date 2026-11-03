@@ -87,7 +87,7 @@ clientRef = client;
 async function main() {
   const bundled = isManagedOpenCode(engineMode, process.env.OPENCODE_URL);
   console.log(
-    `[boot] Memulai Aster Node Agent: id="${nodeId}" uid=${process.getuid?.() ?? "?"} root=${isRoot} engine=${engineMode}${engineMode === "opencode" ? (bundled ? "(bundled)" : "(external)") : ""}`
+    `[boot] Memulai Aster Node Agent: id="${nodeId}" uid=${process.getuid?.() ?? "?"} root=${isRoot} nsenter=${executor.isHostNsenter()} engine=${engineMode}${engineMode === "opencode" ? (bundled ? "(bundled)" : "(external)") : ""}`
   );
 
   if (bundled) {

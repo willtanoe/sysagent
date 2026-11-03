@@ -144,7 +144,45 @@ Karena proses Node berjalan sebagai `root` (`uid=0`), `NodeExecutor` secara otom
 
 ---
 
-## 4. Prosedur Update Produksi
+## 4. Deployment via Docker & Docker Compose (Tanpa Install Node.js di VPS Target)
+
+Jika Anda tidak ingin memasang Node.js 20 di setiap VPS kantor, Anda dapat menjalankan **Aster Hub** maupun **Aster Node Agent** menggunakan Docker (`Dockerfile` dan `docker-compose.yml` bawaan):
+
+### 4.1 Cara Kerja Jembatan Container-ke-Host (`HOST_NSENTER=auto`)
+- **Pada VPS Hub (`--profile hub`)**: Container berjalan secara **terisolasi penuh** (`read_only: true`, `no-new-privileges:true`) karena Hub tidak pernah menjalankan perintah shell ke host.
+- **Pada VPS Node Target (`--profile node`)**: Container dijalankan dengan `--pid=host --net=host --ipc=host --uts=host --privileged`.
+  - [`NodeExecutor`](file:///home/willtanoe/project/sysadmin-agent/src/node/executor.ts) dan [`ManagedOpenCodeServer`](file:///home/willtanoe/project/sysadmin-agent/src/node/opencode-server.ts) otomatis mendeteksi bahwa proses berada di dalam container (`/.dockerenv`) dengan *mount namespace* yang berbeda dari PID 1 host, lalu membungkus setiap eksekusi shell dengan:
+    ```bash
+    nsenter -t 1 -m -u -i -n -p -- /bin/bash -c "<perintah>"
+    ```
+  - Deteksi distro Linux di [`distro.ts`](file:///home/willtanoe/project/sysadmin-agent/src/node/distro.ts) juga membaca `/proc/1/root/etc/os-release` milik VPS asli (bukan OS image container).
+  - **Hasilnya**: Runtime Node.js dan binary `@opencode/cli` terbungkus rapi di dalam container, namun seluruh perintah `systemctl`, `journalctl`, `apt`/`dnf`, `df`, `ps`, `ss`, dan modifikasi `/etc` dieksekusi langsung di **OS VPS host asli**!
+
+### 4.2 Menjalankan Hub via Docker Compose (Di VPS Hub)
+```bash
+git clone -b stg-container git@github.com:willtanoe/sysagent.git /opt/aster-fleet
+cd /opt/aster-fleet
+cp .env.example .env && chmod 600 .env
+# Edit .env (isi HUB_TOKEN, NODE_TOKENS, TELEGRAM_BOT_TOKEN, ALLOWED_USER_ID)
+
+docker compose --profile hub up -d --build
+docker logs -f aster-hub
+```
+
+### 4.3 Menjalankan Node Agent via Docker Compose (Di Tiap VPS Target: `hongyun`, `hongchen`, dll.)
+```bash
+git clone -b stg-container git@github.com:willtanoe/sysagent.git /opt/aster-fleet
+cd /opt/aster-fleet
+cp .env.example .env && chmod 600 .env
+# Edit .env (isi NODE_ID=hongyun, HUB_URL, NODE_TOKEN)
+
+docker compose --profile node up -d --build
+docker logs -f aster-node-hongyun
+```
+
+---
+
+## 5. Prosedur Update Produksi
 
 Untuk memperbarui Hub maupun Node ke rilis terbaru:
 

@@ -5,19 +5,28 @@ const RHEL_FAMILY = ["almalinux", "rocky", "centos", "rhel", "fedora", "ol", "am
 const DEBIAN_FAMILY = ["debian", "ubuntu", "raspbian", "linuxmint", "pop"];
 
 function parseOsRelease(): Record<string, string> {
-  try {
-    const raw = fs.readFileSync("/etc/os-release", "utf8");
-    const parsed: Record<string, string> = {};
-    for (const line of raw.split("\n")) {
-      const match = /^([A-Z_]+)=(.*)$/.exec(line.trim());
-      if (!match) continue;
-      const key = match[1] ?? "";
-      parsed[key] = (match[2] ?? "").replace(/^"|"$/g, "");
+  const inContainer = fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv");
+  const candidates = inContainer
+    ? ["/proc/1/root/etc/os-release", "/etc/os-release"]
+    : ["/etc/os-release"];
+
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(candidate)) continue;
+      const raw = fs.readFileSync(candidate, "utf8");
+      const parsed: Record<string, string> = {};
+      for (const line of raw.split("\n")) {
+        const match = /^([A-Z_]+)=(.*)$/.exec(line.trim());
+        if (!match) continue;
+        const key = match[1] ?? "";
+        parsed[key] = (match[2] ?? "").replace(/^"|"$/g, "");
+      }
+      if (Object.keys(parsed).length > 0) return parsed;
+    } catch {
+      // lanjut ke kandidat berikutnya
     }
-    return parsed;
-  } catch {
-    return {};
   }
+  return {};
 }
 
 function packageManagerFor(id: string): string {
