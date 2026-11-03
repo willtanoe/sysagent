@@ -66,8 +66,17 @@ Setiap perintah yang masuk ke `NodeExecutor` dicatat ke file JSONL lokal dengan 
 
 ---
 
-## 4. Hardening Systemd (`deploy/systemd/`)
+## 4. Hardening Container (`Dockerfile` & `docker-compose.yml`) serta Systemd (`deploy/systemd/`)
 
-- **Pada Hub (`aster-hub.service`)**: Karena Hub tidak pernah menjalankan shell lokal, unit systemd Hub mengaktifkan isolasi penuh: `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`, `PrivateDevices=true`, `ProtectKernelTunables=true`, `NoNewPrivileges=yes`, dan `ReadOnlyPaths=/opt/aster-fleet`.
+### A. Mode Docker Compose (`Dockerfile` & `docker-compose.yml`)
+- **Isolasi Penuh pada Container Hub (`aster-hub`)**:
+  - Karena Hub hanya berfungsi sebagai koordinator WebSocket dan Bot Telegram (tidak pernah mengeksekusi shell host), container `aster-hub` dijalankan dengan `read_only: true` (root filesystem *immutable*), `security_opt: ["no-new-privileges:true"]`, `tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]`, dan menyimpan state hanya pada volume terisolasi `aster-hub-data:/var/lib/aster-hub`.
+- **Host-Namespace terkendali pada Container Node (`aster-node`)**:
+  - Container `aster-node` menggunakan `pid: host`, `network_mode: host`, `privileged: true`, dan `HOST_NSENTER=auto` agar dapat mengeksekusi perintah administrasi di PID 1 VPS host melalui `nsenter -t 1 -m -u -i -n -p -- /bin/bash -c ...`.
+  - Seluruh lapisan keamanan aplikasi (**3-Tier Risk Classifier `assessRisk`**, **Default-Approve Allowlist Gate**, **Anti-Obfuscation `isSecretAccess`**, **Environment Sanitizer `sanitizeEnv`**, serta **OpenCode Permission Guard**) tetap dipaksakan penuh sebelum perintah menyentuh `nsenter`.
+  - File audit berantai hash (`audit-<nodeId>.jsonl`) dan direktori state OpenCode disimpan secara persisten di volume Docker `aster-node-data:/var/lib/aster-node` (di luar *ephemeral container layer*) sehingga jejak audit tidak hilang saat container di-*rebuild* atau di-*restart*.
+
+### B. Mode Host-Native Systemd (`deploy/systemd/`)
+- **Pada Hub (`aster-hub.service`)**: Mengaktifkan isolasi penuh: `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`, `PrivateDevices=true`, `ProtectKernelTunables=true`, `NoNewPrivileges=yes`, dan `ReadOnlyPaths=/opt/aster-fleet`.
 - **Pada Node (`aster-node*.service`)**: Mengaktifkan `ReadOnlyPaths` pada direktori instalasi agen sehingga agen (bahkan jika berjalan sebagai `root`) tidak dapat memodifikasi kode atau konfigurasi `.env` miliknya sendiri, ditambah `UMask=0077`, `StateDirectoryMode=0700`, `RestrictRealtime=yes`, `LockPersonality=yes`, `SystemCallArchitectures=native`, serta batas sumber daya `TasksMax=4096` dan `MemoryMax=2G`.
 - **Kompatibilitas `ProtectHome=true` (`aster-node-isolated.service`)**: `ManagedOpenCodeServer` mengarahkan seluruh variabel `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, dan `XDG_CONFIG_HOME` ke dalam direktori `/var/lib/aster-node/opencode-<nodeId>`, sedangkan `NodeExecutor.initSudo` memiliki *fallback* otomatis ke `/var/lib/aster-node/.aster-askpass` (`0700`) apabila `/home` dikunci oleh `ProtectHome=true`.

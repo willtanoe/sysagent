@@ -81,8 +81,9 @@ Node akan menghitung ulang rantai hash SHA-256 dari entri pertama (`GENESIS`) hi
 
 | Gejala | Penyebab | Solusi |
 |---|---|---|
-| Node tidak muncul di `/nodes` | `HUB_URL` salah, port firewall Hub tertutup, atau token tidak cocok | Cek `journalctl -u aster-node -n 50` di server node; pastikan `NODE_TOKEN` / `HUB_TOKEN` sesuai dengan konfigurasi Hub |
-| Perintah `sudo` langsung gagal dengan pesan *password is required* | Node berjalan non-root tanpa `SUDO_PASSWORD` dan belum diatur `NOPASSWD` di sudoers | Tambahkan aturan `NOPASSWD` di `/etc/sudoers.d/aster` (disarankan) atau isi `SUDO_PASSWORD` di `.env` node |
-| Tombol *Setujui* tidak merespons | User yang menekan tidak ada di `ALLOWED_USER_ID` atau *approval* sudah kedaluwarsa | Cek `/id` dan pastikan ID Anda terdaftar di `ALLOWED_USER_ID` pada `.env` Hub |
-| Error `409 Conflict` di log Hub | Ada dua proses Hub yang menjalankan `TELEGRAM_BOT_TOKEN` yang sama | Hentikan salah satu proses Hub yang duplikat |
-| `/auditcheck` melaporkan rantai rusak | File `.jsonl` diedit manual atau ditimpa | Arsipkan/rotasi file audit lama agar node memulai rantai `GENESIS` baru, lalu periksa akses ke server tersebut |
+| Node tidak muncul di `/nodes` | `HUB_URL` salah, port firewall Hub tertutup, atau token tidak cocok | Cek `docker logs -f aster-node-<nodeId>` (atau `journalctl -u aster-node -n 50` jika via systemd); pastikan `NODE_TOKEN` / `HUB_TOKEN` sesuai dengan konfigurasi Hub |
+| Perintah di container Node hanya melihat filesystem dalam container, bukan VPS host | Container Node dijalankan manual tanpa `--pid=host --privileged` atau `HOST_NSENTER=false` | Gunakan `docker compose --profile node up -d` dan pastikan `HOST_NSENTER=auto` (atau `true`) di `.env` agar `nsenter -t 1` aktif |
+| Hub berjalan tapi bot Telegram belum merespons | `TELEGRAM_BOT_TOKEN` kosong (mode *Headless WSS Coordinator*) atau VPS Hub belum memiliki akses internet keluar ke `api.telegram.org` | Pastikan akses internet HTTPS (port 443) ke `api.telegram.org` sudah dibuka dan `TELEGRAM_BOT_TOKEN` telah diisi di `.env` Hub, lalu jalankan `docker compose --profile hub restart` |
+| Tombol *Setujui* tidak merespons | User yang menekan tidak ada di `ALLOWED_USER_ID`, menekan dari ruang chat yang berbeda, atau *approval* sudah kedaluwarsa | Cek `/id` dan pastikan ID Anda terdaftar di `ALLOWED_USER_ID` pada `.env` Hub |
+| Error `409 Conflict` di log Hub | Ada dua proses/container Hub yang menjalankan `TELEGRAM_BOT_TOKEN` yang sama | Hentikan salah satu instance Hub yang duplikat (`docker compose --profile hub down` atau `systemctl stop aster-hub`) |
+| `/auditcheck` melaporkan rantai rusak | File `.jsonl` diedit manual atau ditimpa | Arsipkan/rotasi file audit lama di volume `/var/lib/aster-node` agar node memulai rantai `GENESIS` baru, lalu periksa akses ke server tersebut |

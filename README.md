@@ -92,43 +92,40 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 ## Mulai Cepat (Quickstart)
 
 ### Prasyarat
-- Linux dengan `systemd` (Ubuntu/Debian, RHEL/AlmaLinux/Rocky, Arch, Alpine, openSUSE).
-- Node.js `>= 20.3.0`.
-- Token Bot Telegram dari [@BotFather](https://t.me/BotFather) dan Telegram User ID admin.
+- **Mode Container (Disarankan di `stg-container`)**: Docker & Docker Compose v2 (tidak perlu menginstal Node.js di host VPS).
+- **Mode Host-Native (`systemd`)**: Linux dengan `systemd` dan Node.js `>= 20.3.0`.
+- Token Bot Telegram dari [@BotFather](https://t.me/BotFather) dan Telegram User ID admin (opsional saat fase *staging* intranet sebelum internet Hub dibuka).
 
-### 1. Instalasi & Build (Mode Full-Root)
+### 1. Instalasi & Konfigurasi (`stg-container`)
 ```bash
 mkdir -p /opt/aster-fleet
-git clone -b full-root git@github.com:willtanoe/sysagent.git /opt/aster-fleet
+git clone -b stg-container git@github.com:willtanoe/sysagent.git /opt/aster-fleet
 cd /opt/aster-fleet
-npm ci
 cp .env.example .env
 chmod 600 .env
-npm run build
 ```
 
-### 2. Jalankan Pengujian Otomatis
+### 2. Menjalankan Hub & Node via Docker Compose (Utama)
 ```bash
+# A. Di VPS Hub (Container Terisolasi Penuh / Read-Only Rootfs):
+docker compose --profile hub up -d --build
+docker logs -f aster-hub
+
+# B. Di Setiap VPS Node Target (Host-Namespace + Auto-nsenter ke PID 1 VPS):
+NODE_ID=hongyun docker compose --profile node up -d --build
+docker logs -f aster-node-hongyun
+```
+
+### 3. Alternatif: Instalasi Host-Native & Pengujian Otomatis
+Jika dijalankan langsung di host tanpa Docker:
+```bash
+npm ci
+npm run build
 npm test
 ```
-Menjalankan 21 skenario pengujian tanpa ketergantungan jaringan luar: autentikasi token master & per-node, eksekusi multi-node terisolasi, *approval gate*, pemblokiran perintah destruktif, sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`), pembatalan proses (`/stop`), *proactive alert*, integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), dan *auto-reconnect*.
+`npm test` menjalankan 21 skenario pengujian tanpa ketergantungan jaringan luar: autentikasi token master & per-node, eksekusi multi-node terisolasi, *approval gate*, pemblokiran perintah destruktif & *secret* level `root`, pelucutan `sudo` redundan (`stripRedundantSudo`), jembatan container `nsenter -t 1` (`buildSpawnSpec`), sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`), pembatalan proses (`/stop`), *proactive alert*, integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), dan *auto-reconnect*.
 
-### 3. Menjalankan Hub & Node (Systemd atau Docker)
-- **Via Docker Compose (Tanpa Install Node.js di VPS Host)**:
-  ```bash
-  # Di VPS Hub (Container Terisolasi):
-  docker compose --profile hub up -d --build
-
-  # Di VPS Node Target (Host-Namespace + Auto-nsenter ke PID 1 VPS):
-  NODE_ID=hongyun docker compose --profile node up -d --build
-  ```
-- **Via Node.js / Systemd Langsung di Host**:
-  ```bash
-  npm run start:hub
-  NODE_ID=hongyun npm run start:node
-  ```
-
-Untuk pemasangan permanen menggunakan `Docker Compose` maupun `systemd` (termasuk TLS/WSS dan konfigurasi *multi-server*), lihat panduan lengkap di **[docs/deployment.md](docs/deployment.md)**.
+Untuk panduan lengkap arsitektur jembatan `nsenter`, konfigurasi `.env`, TLS/WSS, serta operasional multi-server, lihat **[docs/deployment.md](docs/deployment.md)**.
 
 ---
 

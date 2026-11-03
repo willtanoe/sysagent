@@ -8,8 +8,8 @@ Dokumen ini menjelaskan desain internal, protokol komunikasi, dan alur kerja kom
 
 | Komponen | Lokasi | Tanggung Jawab Utama |
 |---|---|---|
-| **Aster Hub** (`src/hub/`) | 1 Server Koordinasi Pusat | Menjalankan Bot Telegram, menerima koneksi *inbound* WebSocket (`ws`/`wss`) dari seluruh node, memvalidasi token autentikasi, menyimpan state sesi chat (`HubStore`), meneruskan permintaan *approval* ke Telegram, dan mem-forward *alert* proaktif ke admin. **Hub tidak pernah mengeksekusi perintah shell di host-nya sendiri.** |
-| **Aster Node** (`src/node/`) | Setiap Server / VPS Kantor | Menginisiasi koneksi *outbound* WebSocket ke Hub, mendeteksi distribusi OS (`distro.ts`), menjalankan loop AI tool-calling (`engine.ts`), menilai risiko perintah (`risk.ts`), mengeksekusi perintah dalam *process group* terisolasi (`executor.ts`), mencatat audit berantai hash (`audit.ts`), dan memantau kesehatan sistem (`alerts.ts`). |
+| **Aster Hub** (`src/hub/`) | 1 Server Koordinasi Pusat (Container `--profile hub` atau `systemd`) | Menjalankan Bot Telegram (atau mode *Headless WSS Coordinator* jika `TELEGRAM_BOT_TOKEN` belum diisi), menerima koneksi *inbound* WebSocket (`ws`/`wss`) dari seluruh node, memvalidasi token autentikasi, menyimpan state sesi chat (`HubStore`), meneruskan permintaan *approval* ke Telegram, dan mem-forward *alert* proaktif ke admin. **Hub tidak pernah mengeksekusi perintah shell di host-nya sendiri.** |
+| **Aster Node** (`src/node/`) | Setiap Server / VPS Kantor (Container `--profile node` + `nsenter` atau `systemd`) | Menginisiasi koneksi *outbound* WebSocket ke Hub, mendeteksi distribusi OS host (`distro.ts`), menjalankan loop AI tool-calling (`engine.ts`), menilai risiko perintah (`risk.ts`), mengeksekusi perintah di namespace host dalam *process group* terisolasi (`executor.ts`), mencatat audit berantai hash (`audit.ts`), dan memantau kesehatan sistem (`alerts.ts`). |
 | **Shared Core** (`src/shared/`) | Digunakan bersama | Kontrak protokol pesan (`protocol.ts`), klasifikasi risiko (`risk.ts`), pencatat & verifikator rantai audit (`audit.ts`), serta pemformatan Markdown ke HTML Telegram (`format.ts`). |
 
 ---
@@ -103,7 +103,27 @@ sequenceDiagram
 
 ---
 
-## 5. Persistensi State di Hub (`src/hub/store.ts`)
+## 5. Arsitektur Jembatan Container-ke-Host (`HOST_NSENTER` & `pid: host`)
+
+Ketika **Aster Node Agent** dijalankan di dalam Docker container (`docker compose --profile node up -d`), container berbagi namespace `pid: host`, `network_mode: host`, `ipc: host`, dan `uts: host` dengan VPS utama, namun secara default proses Node.js masih melihat *root filesystem* (`/`) milik image container.
+
+Agar agen dapat mengelola layanan `systemd`, paket OS (`apt`/`dnf`), konfigurasi `/etc`, dan *storage* VPS host secara transparan tanpa perlu menginstal Node.js di host:
+
+1. **Deteksi Otomatis Container & Namespace (`shouldUseHostNsenter` di `src/node/executor.ts`)**:
+   - Mode default `HOST_NSENTER=auto` memeriksa keberadaan `/.dockerenv` atau `/run/.containerenv` serta membandingkan symlink `/proc/self/ns/mnt` dengan `/proc/1/ns/mnt`.
+   - Jika agen berjalan sebagai `root` di dalam container dan *mount namespace*-nya berbeda dari PID 1 host, `buildSpawnSpec(cmd)` secara otomatis mengeksekusi:
+     ```bash
+     nsenter -t 1 -m -u -i -n -p -- /bin/bash -c "<cmd>"
+     ```
+2. **Wrapper `SHELL` untuk Bundled OpenCode (`src/node/opencode-server.ts`)**:
+   - Saat `shouldUseHostNsenter()` aktif, `ManagedOpenCodeServer` membuat skrip wrapper `/var/lib/aster-node/opencode-<nodeId>/host-bash.sh` (`0700`) yang meneruskan eksekusi ke `nsenter -t 1 -m -u -i -n -p -- /bin/bash "$@"`, lalu menyuntikkannya melalui variabel environment `SHELL` ke daemon `opencode serve`.
+   - Dengan demikian, baik eksekusi via `/exec`, `/status`, `/svc`, `/logs`, `NodeAlertMonitor`, maupun tool `shell` milik OpenCode semuanya berjalan langsung di atas **OS VPS host asli**.
+3. **Deteksi Distro Host (`src/node/distro.ts`)**:
+   - Jika berada di dalam container, `detectDistro()` membaca `/proc/1/root/etc/os-release` terlebih dahulu sehingga informasi OS yang dilaporkan ke Hub dan AI merupakan distro VPS host sebenarnya (misal Ubuntu/RHEL/Rocky host, bukan Debian container).
+
+---
+
+## 6. Persistensi State di Hub (`src/hub/store.ts`)
 
 `HubStore` menyimpan state operasional ke file JSON (`HUB_STATE_FILE`, mode `0600`) menggunakan mekanisme *atomic write* (`.tmp` + `rename`) dengan *debounce* 1 detik dan *flush* otomatis saat menerima sinyal `SIGINT`/`SIGTERM`:
 - Pilihan node aktif per `chatId`.

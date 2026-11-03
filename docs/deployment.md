@@ -1,19 +1,19 @@
-# Panduan Deployment Server Kantor (Mode Full-Root)
+# Panduan Deployment Server Kantor (Containerized & Full-Root)
 
-Panduan ini mencakup instalasi produksi untuk **Aster Hub** (server koordinasi pusat) dan **Aster Node Agent** (di setiap server/VPS kantor yang dikelola) dalam lingkungan **Full-Root** (seluruh server berjalan langsung sebagai `root` tanpa perlu membuat user OS tambahan).
+Panduan ini mencakup instalasi produksi untuk **Aster Hub** (server koordinasi pusat) dan **Aster Node Agent** (di setiap server/VPS kantor yang dikelola) pada branch `stg-container`, baik menggunakan **Docker Compose + Host-Bridge `nsenter`** (disarankan agar tidak perlu menginstal Node.js di host VPS) maupun menggunakan **Systemd Full-Root** secara langsung.
 
 ---
 
 ## 1. Persiapan Awal (Di Hub maupun Node)
 
-Pastikan Node.js `>= 20.3` telah terpasang di server. Siapkan direktori instalasi `/opt/aster-fleet` langsung sebagai `root`:
+Siapkan direktori instalasi `/opt/aster-fleet` langsung sebagai `root`:
 
 ```bash
 mkdir -p /opt/aster-fleet
-git clone -b full-root git@github.com:willtanoe/sysagent.git /opt/aster-fleet
+git clone -b stg-container git@github.com:willtanoe/sysagent.git /opt/aster-fleet
 cd /opt/aster-fleet
-npm ci
-npm run build
+cp .env.example .env
+chmod 600 .env
 ```
 
 ---
@@ -184,11 +184,24 @@ docker logs -f aster-node-hongyun
 
 ## 5. Prosedur Update Produksi
 
-Untuk memperbarui Hub maupun Node ke rilis terbaru:
+Untuk memperbarui Hub maupun Node ke rilis terbaru di branch `stg-container`:
 
+### A. Jika Menggunakan Docker Compose
 ```bash
 cd /opt/aster-fleet
-git pull
+git pull origin stg-container
+
+# Di VPS Hub:
+docker compose --profile hub up -d --build
+
+# Di VPS Node Target:
+docker compose --profile node up -d --build
+```
+
+### B. Jika Menggunakan Systemd Langsung di Host
+```bash
+cd /opt/aster-fleet
+git pull origin stg-container
 npm ci
 npm run build
 npm test
