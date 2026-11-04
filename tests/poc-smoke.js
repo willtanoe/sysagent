@@ -1,10 +1,10 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const { 中枢服务器, parseNodeTokens } = require("../dist/hub/server.js");
-const { 中枢存储 } = require("../dist/hub/store.js");
+const { 中枢服务器, 解析节点令牌列表 } = require("../dist/hub/server.js");
+const { 中枢存储类: 中枢存储 } = require("../dist/hub/store.js");
 const { 节点客户端 } = require("../dist/node/client.js");
-const { 节点执行器, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
+const { 节点执行器, sanitizeEnv, 剥离冗余提权 } = require("../dist/node/executor.js");
 const { 节点引擎 } = require("../dist/node/engine.js");
 const { isManagedOpenCode, resolveOpenCodeBinary } = require("../dist/node/opencode-server.js");
 const { OpenCodeRunner } = require("../dist/node/opencode.js");
@@ -15,10 +15,10 @@ const {
   buildEccContextForPrompt,
   provisionOpenCodeEcc,
 } = require("../dist/node/ecc.js");
-const { createNodeAlertEvaluator } = require("../dist/node/alerts.js");
-const { assessRisk, isReadOnlyCommand } = require("../dist/shared/risk.js");
-const { redactSecrets } = require("../dist/shared/audit.js");
-const { markdownToHtml, chunkHtml } = require("../dist/shared/format.js");
+const { 创建节点告警评估器: createNodeAlertEvaluator } = require("../dist/node/alerts.js");
+const { 评估风险: assessRisk, 是否读取仅命令: isReadOnlyCommand } = require("../dist/shared/risk.js");
+const { 脱敏密钥列表: redactSecrets } = require("../dist/shared/audit.js");
+const { 标记文本到超文本标记: markdownToHtml, 块超文本标记: chunkHtml } = require("../dist/shared/format.js");
 
 const PORT = 9876;
 const SECRET_TOKEN = "test-secret-prod-1234567890";
@@ -39,26 +39,26 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   // 1. Hub 启动（Master Token 与 Per-Node Token）
-  const nodeTokens = parseNodeTokens(`hongyun:${HONGYUN_TOKEN}`);
+  const nodeTokens = 解析节点令牌列表(`hongyun:${HONGYUN_TOKEN}`);
   const hub = new 中枢服务器(PORT, SECRET_TOKEN, {
     host: "127.0.0.1",
-    nodeTokens,
-    authTimeoutMs: 1000,
+    节点令牌列表: nodeTokens,
+    认证超时毫秒: 1000,
   });
-  await hub.start();
+  await hub.启动();
   console.log("✓ 1. Hub berhasil start di port", PORT, "(mendukung master & per-node token)");
 
   // 2. token 错误的节点必须以常量时间被拒绝
   const badExecutor = new 节点执行器("bad-node", "/tmp/bad.jsonl");
   const badEngine = new 节点引擎("bad-node", badExecutor);
   const badClient = new 节点客户端(
-    { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "bad-node", token: "wrong-token" },
+    { 中枢地址: `ws://127.0.0.1:${PORT}`, 节点标识: "bad-node", 令牌: "wrong-token" },
     badEngine
   );
-  badClient.start();
+  badClient.启动();
   await sleep(250);
-  assert.strictEqual(hub.listNodes().length, 0, "Bad node tidak boleh terdaftar");
-  badClient.stop();
+  assert.strictEqual(hub.列出节点列表().length, 0, "Bad node tidak boleh terdaftar");
+  badClient.停止();
   fs.rmSync("/tmp/bad.jsonl", { force: true });
   console.log("✓ 2. Autentikasi token salah ditolak oleh Hub (constant-time SHA-256 verification)");
 
@@ -66,47 +66,47 @@ async function runTests() {
   const execHongyun = new 节点执行器("hongyun", auditHongyun);
   const engineHongyun = new 节点引擎("hongyun", execHongyun);
   const clientHongyun = new 节点客户端(
-    { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "hongyun", token: HONGYUN_TOKEN, reconnectDelayMs: 300 },
+    { 中枢地址: `ws://127.0.0.1:${PORT}`, 节点标识: "hongyun", 令牌: HONGYUN_TOKEN, 重连延迟毫秒: 300 },
     engineHongyun
   );
 
   const execHongchen = new 节点执行器("hongchen", auditHongchen);
   const engineHongchen = new 节点引擎("hongchen", execHongchen);
   const clientHongchen = new 节点客户端(
-    { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "hongchen", token: SECRET_TOKEN, reconnectDelayMs: 300 },
+    { 中枢地址: `ws://127.0.0.1:${PORT}`, 节点标识: "hongchen", 令牌: SECRET_TOKEN, 重连延迟毫秒: 300 },
     engineHongchen
   );
 
-  clientHongyun.start();
-  clientHongchen.start();
+  clientHongyun.启动();
+  clientHongchen.启动();
   await sleep(500);
 
-  const nodes = hub.listNodes();
+  const nodes = hub.列出节点列表();
   assert.strictEqual(nodes.length, 2, "Harus ada 2 node terdaftar");
-  const nodeIds = nodes.map((n) => n.nodeId).sort();
+  const nodeIds = nodes.map((n) => n.节点标识).sort();
   assert.deepStrictEqual(nodeIds, ["hongchen", "hongyun"]);
   console.log("✓ 3. Node 'hongyun' (per-node token) dan 'hongchen' (master token) terdaftar:", nodeIds.join(", "));
 
   // 4. 元数据与 Distro 检测
-  const nodeHy = hub.getNode("hongyun");
-  const nodeHc = hub.getNode("hongchen");
-  assert.ok(nodeHy && nodeHy.info.hostname && nodeHy.info.distro, "Metadata & distro hongyun lengkap");
-  assert.ok(nodeHc && nodeHc.info.hostname && nodeHc.info.distro, "Metadata & distro hongchen lengkap");
+  const nodeHy = hub.获取节点("hongyun");
+  const nodeHc = hub.获取节点("hongchen");
+  assert.ok(nodeHy && nodeHy.信息.主机名 && nodeHy.信息.发行版, "Metadata & distro hongyun lengkap");
+  assert.ok(nodeHc && nodeHc.信息.主机名 && nodeHc.信息.发行版, "Metadata & distro hongchen lengkap");
   console.log(
-    `✓ 4. Metadata fleet & distro: host=${nodeHy.info.hostname}, distro=${nodeHy.info.distro.name} (${nodeHy.info.distro.packageManager})`
+    `✓ 4. Metadata fleet & distro: host=${nodeHy.信息.主机名}, distro=${nodeHy.信息.发行版.名称} (${nodeHy.信息.发行版.软件包管理器})`
   );
 
   // 5. 在 Hongyun 执行安全命令 ($ uptime)
   let hongyunChunks = "";
   let hongyunDone = false;
-  hub.startRun("hongyun", 1001, "$ uptime", {
-    onChunk: (c) => {
+  hub.启动运行("hongyun", 1001, "$ uptime", {
+    当块: (c) => {
       hongyunChunks += c;
     },
-    onApprovalReq: () => {
+    当审批请求: () => {
       assert.fail("uptime tidak boleh minta approval");
     },
-    onDone: (res) => {
+    当完成: (res) => {
       hongyunDone = true;
       assert.ok(res.includes("[hongyun]"), "Output harus beridentitas hongyun");
     },
@@ -119,12 +119,12 @@ async function runTests() {
 
   // 6. 在 Hongchen 执行安全命令 ($ whoami)
   let hongchenDone = false;
-  hub.startRun("hongchen", 1001, "$ whoami", {
-    onChunk: () => {},
-    onApprovalReq: () => {
+  hub.启动运行("hongchen", 1001, "$ whoami", {
+    当块: () => {},
+    当审批请求: () => {
       assert.fail("whoami tidak boleh minta approval");
     },
-    onDone: (res) => {
+    当完成: (res) => {
       hongchenDone = true;
       assert.ok(res.includes("[hongchen]"), "Output harus beridentitas hongchen");
     },
@@ -139,21 +139,21 @@ async function runTests() {
   assert.ok(fs.existsSync(auditHongchen), "audit hongchen harus ada");
   const modeHy = fs.statSync(auditHongyun).mode & 0o777;
   assert.strictEqual(modeHy, 0o600, "File audit wajib memiliki permission 0600");
-  const verifyHy = execHongyun.verifyAudit();
-  assert.strictEqual(verifyHy.ok, true, "Audit chain hongyun harus valid");
-  assert.strictEqual(verifyHy.total, 1);
+  const verifyHy = execHongyun.验证审计();
+  assert.strictEqual(verifyHy.是否成功, true, "Audit chain hongyun harus valid");
+  assert.strictEqual(verifyHy.总计, 1);
   console.log("✓ 7. Audit log per-node independen, mode 0600, & hash-chain terverifikasi");
 
   // 8. Hongyun 的风险命令：由 Operator 通过 Hub 拒绝
   let approvalReqReceived = false;
-  hub.startRun("hongyun", 1001, "$ systemctl restart nginx", {
-    onChunk: () => {},
-    onApprovalReq: (approvalId, cmd) => {
+  hub.启动运行("hongyun", 1001, "$ systemctl restart nginx", {
+    当块: () => {},
+    当审批请求: (approvalId, cmd) => {
       approvalReqReceived = true;
       assert.strictEqual(cmd, "systemctl restart nginx");
-      hub.sendApproval("hongyun", "fake", approvalId, false);
+      hub.发送审批("hongyun", "fake", approvalId, false);
     },
-    onDone: (res) => {
+    当完成: (res) => {
       assert.ok(res.includes("[REJECTED]"), "Harus ada notif REJECTED");
     },
   });
@@ -164,20 +164,20 @@ async function runTests() {
 
   // 9. Hongyun 的风险命令：由 Operator 通过 Hub 批准（回调 <=64 字节与 chatId 隔离验证）
   let approvalApprovedReceived = false;
-  hub.startRun("hongyun", 1001, "$ cp /etc/hostname /tmp/aster-hostname-test", {
-    onChunk: () => {},
-    onApprovalReq: (approvalId) => {
+  hub.启动运行("hongyun", 1001, "$ cp /etc/hostname /tmp/aster-hostname-test", {
+    当块: () => {},
+    当审批请求: (approvalId) => {
       approvalApprovedReceived = true;
       const cbData = `ap:${approvalId}:yes`;
       assert.ok(Buffer.byteLength(cbData, "utf8") <= 64, "Telegram callback_data wajib <= 64 byte");
       assert.strictEqual(
-        hub.resolveApprovalById(approvalId, true, 9999),
+        hub.解析审批按标识(approvalId, true, 9999),
         false,
         "Chat lain tidak boleh menyetujui approval milik chat 1001"
       );
-      assert.strictEqual(hub.resolveApprovalById(approvalId, true, 1001), true);
+      assert.strictEqual(hub.解析审批按标识(approvalId, true, 1001), true);
     },
-    onDone: (res) => {
+    当完成: (res) => {
       assert.ok(!res.includes("[REJECTED]"), "Tidak boleh ditolak");
     },
   });
@@ -189,12 +189,12 @@ async function runTests() {
 
   // 10. 危险命令与敏感文件访问（Block list）
   let blockRunDone = false;
-  hub.startRun("hongchen", 1001, "$ rm -rf /", {
-    onChunk: () => {},
-    onApprovalReq: () => {
+  hub.启动运行("hongchen", 1001, "$ rm -rf /", {
+    当块: () => {},
+    当审批请求: () => {
       assert.fail("rm -rf / harus diblok tanpa minta approval");
     },
-    onDone: (res) => {
+    当完成: (res) => {
       blockRunDone = true;
       assert.ok(res.includes("[BLOCKED]"), "Harus ada status BLOCKED");
     },
@@ -202,28 +202,28 @@ async function runTests() {
 
   await sleep(400);
   assert.ok(blockRunDone, "Blocked command selesai");
-  assert.strictEqual(assessRisk("cat .env").level, "block");
-  assert.strictEqual(assessRisk("cat .e\\nv").level, "block");
-  assert.strictEqual(assessRisk("cat /etc/shadow").level, "block");
-  assert.strictEqual(assessRisk("cat /etc/{shadow}").level, "block");
-  assert.strictEqual(assessRisk("cat /etc/shad*").level, "block");
-  assert.strictEqual(assessRisk("cat /etc/ssl/private/server.key").level, "block");
-  assert.strictEqual(assessRisk("cat /etc/letsencrypt/live/domain/privkey.pem").level, "block");
-  assert.strictEqual(assessRisk("cat /etc/wireguard/wg0.conf").level, "block");
-  assert.strictEqual(assessRisk("cat /root/.kube/config").level, "block");
-  assert.strictEqual(assessRisk("cat /root/.docker/config.json").level, "block");
-  assert.strictEqual(assessRisk("printenv").level, "block");
-  assert.strictEqual(assessRisk("echo pass | sudo -S id").level, "block");
-  assert.strictEqual(assessRisk("touch /tmp/x").level, "approve");
-  assert.strictEqual(assessRisk("mkdir -p /tmp/x").level, "approve");
-  assert.strictEqual(assessRisk("find /tmp -exec rm {} +").level, "approve");
-  assert.strictEqual(assessRisk("/opt/custom/deploy.sh").level, "approve");
-  assert.strictEqual(assessRisk("awk '{print \"x\" > \"/etc/pwn\"}' /etc/hosts").level, "approve");
-  assert.strictEqual(assessRisk("sed 's/.*/id/e' /etc/hosts").level, "approve");
-  assert.strictEqual(assessRisk("sed 'w /tmp/pwn' /etc/hosts").level, "approve");
-  assert.strictEqual(assessRisk("awk '$1 > 2 {print $1}' /etc/hosts").level, "allow");
-  assert.strictEqual(stripRedundantSudo("sudo systemctl status nginx"), "systemctl status nginx");
-  assert.strictEqual(stripRedundantSudo("sudo -u postgres psql"), "sudo -u postgres psql");
+  assert.strictEqual(assessRisk("cat .env").级别, "block");
+  assert.strictEqual(assessRisk("cat .e\\nv").级别, "block");
+  assert.strictEqual(assessRisk("cat /etc/shadow").级别, "block");
+  assert.strictEqual(assessRisk("cat /etc/{shadow}").级别, "block");
+  assert.strictEqual(assessRisk("cat /etc/shad*").级别, "block");
+  assert.strictEqual(assessRisk("cat /etc/ssl/private/server.key").级别, "block");
+  assert.strictEqual(assessRisk("cat /etc/letsencrypt/live/domain/privkey.pem").级别, "block");
+  assert.strictEqual(assessRisk("cat /etc/wireguard/wg0.conf").级别, "block");
+  assert.strictEqual(assessRisk("cat /root/.kube/config").级别, "block");
+  assert.strictEqual(assessRisk("cat /root/.docker/config.json").级别, "block");
+  assert.strictEqual(assessRisk("printenv").级别, "block");
+  assert.strictEqual(assessRisk("echo pass | sudo -S id").级别, "block");
+  assert.strictEqual(assessRisk("touch /tmp/x").级别, "approve");
+  assert.strictEqual(assessRisk("mkdir -p /tmp/x").级别, "approve");
+  assert.strictEqual(assessRisk("find /tmp -exec rm {} +").级别, "approve");
+  assert.strictEqual(assessRisk("/opt/custom/deploy.sh").级别, "approve");
+  assert.strictEqual(assessRisk("awk '{print \"x\" > \"/etc/pwn\"}' /etc/hosts").级别, "approve");
+  assert.strictEqual(assessRisk("sed 's/.*/id/e' /etc/hosts").级别, "approve");
+  assert.strictEqual(assessRisk("sed 'w /tmp/pwn' /etc/hosts").级别, "approve");
+  assert.strictEqual(assessRisk("awk '$1 > 2 {print $1}' /etc/hosts").级别, "allow");
+  assert.strictEqual(剥离冗余提权("sudo systemctl status nginx"), "systemctl status nginx");
+  assert.strictEqual(剥离冗余提权("sudo -u postgres psql"), "sudo -u postgres psql");
   assert.strictEqual(isReadOnlyCommand("uname -a | grep -i linux"), true);
   assert.strictEqual(isReadOnlyCommand("echo hi > /tmp/x"), false);
   console.log("✓ 10. Risk classifier memblokir perintah destruktif, pembacaan secret (termasuk level root), & env leak");
@@ -232,8 +232,8 @@ async function runTests() {
   process.env.TEST_SECRET_TOKEN = "rahasia-negara-123";
   const sanitized = sanitizeEnv(process.env);
   assert.strictEqual(sanitized.TEST_SECRET_TOKEN, undefined, "Variabel SECRET/TOKEN harus dihapus dari child env");
-  const envCheckRes = await execHongyun.runCommand("echo ${TEST_SECRET_TOKEN:-kosong}");
-  assert.strictEqual(envCheckRes.output.trim(), "kosong", "Shell anak tidak boleh bisa membaca secret env");
+  const envCheckRes = await execHongyun.运行命令("echo ${TEST_SECRET_TOKEN:-kosong}");
+  assert.strictEqual(envCheckRes.输出内容.trim(), "kosong", "Shell anak tidak boleh bisa membaca secret env");
   delete process.env.TEST_SECRET_TOKEN;
   console.log("✓ 11. Sanitasi environment child process mencegah kebocoran token/password");
 
@@ -242,10 +242,10 @@ async function runTests() {
   assert.ok(!redacted.includes("my-secret-jwt") && !redacted.includes("supersecret") && !redacted.includes("12345"));
 
   let auditCheckOut = "";
-  hub.startRun("hongyun", 1001, "__builtin:auditcheck", {
-    onChunk: () => {},
-    onApprovalReq: () => {},
-    onDone: (res) => {
+  hub.启动运行("hongyun", 1001, "__builtin:auditcheck", {
+    当块: () => {},
+    当审批请求: () => {},
+    当完成: (res) => {
       auditCheckOut = res;
     },
   });
@@ -255,10 +255,10 @@ async function runTests() {
 
   // 13. 内置状态仪表盘 (__builtin:status)
   const statusOut = await new Promise((resolve, reject) => {
-    hub.startRun("hongyun", 1001, "__builtin:status", {
-      onChunk: () => {},
-      onApprovalReq: () => {},
-      onDone: (res, err) => (err ? reject(new Error(err)) : resolve(res)),
+    hub.启动运行("hongyun", 1001, "__builtin:status", {
+      当块: () => {},
+      当审批请求: () => {},
+      当完成: (res, err) => (err ? reject(new Error(err)) : resolve(res)),
     });
   });
   assert.ok(statusOut.includes("load") && statusOut.includes("mem") && statusOut.includes("disk"));
@@ -266,15 +266,15 @@ async function runTests() {
 
   // 14. 任务取消 (/stop -> hub_cancel -> kill process tree)
   let cancelErr = "";
-  hub.startRun("hongchen", 2002, "$ sleep 30", {
-    onChunk: () => {},
-    onApprovalReq: () => {},
-    onDone: (_res, err) => {
+  hub.启动运行("hongchen", 2002, "$ sleep 30", {
+    当块: () => {},
+    当审批请求: () => {},
+    当完成: (_res, err) => {
       cancelErr = err || "";
     },
   });
   await sleep(250);
-  const cancelledCount = hub.cancelChatRuns(2002);
+  const cancelledCount = hub.取消聊天运行列表(2002);
   assert.strictEqual(cancelledCount, 1, "Harus membatalkan 1 run aktif");
   await sleep(300);
   assert.strictEqual(cancelErr, "ABORTED", "Run yang dibatalkan harus berstatus ABORTED");
@@ -289,22 +289,22 @@ async function runTests() {
   });
   const alertState = new Map();
   const evalAlert = createNodeAlertEvaluator({
-    nodeId: "hongyun",
-    send: (ev) => clientHongyun.sendAlert(ev.key, ev.severity, ev.html),
-    get: (k) => alertState.get(k) ?? null,
-    set: (k, v) => (v === null ? alertState.delete(k) : alertState.set(k, v)),
-    now: Date.now,
-    cooldownMs: 1000,
-    diskPct: 90,
-    memPct: 92,
+    节点标识: "hongyun",
+    发送: (ev) => clientHongyun.发送告警(ev.键, ev.严重度, ev.超文本标记),
+    获取: (k) => alertState.get(k) ?? null,
+    设置: (k, v) => (v === null ? alertState.delete(k) : alertState.set(k, v)),
+    当前时间: Date.now,
+    冷却毫秒: 1000,
+    磁盘百分比: 90,
+    内存百分比: 92,
   });
-  await evalAlert({
-    diskPct: 95,
-    diskDetail: "/dev/sda1 95%",
-    memPct: 40,
-    memDetail: "",
-    failedUnits: [],
-    failedDetail: "",
+  const _r = await evalAlert({
+    磁盘百分比: 95,
+    磁盘详情: "/dev/sda1 95%",
+    内存百分比: 40,
+    内存详情: "",
+    失败单元列表: [],
+    失败详情: "",
   });
   await sleep(300);
   assert.ok(receivedAlertHtml.includes("95%"), "Hub harus menerima alert proaktif disk dari node");
@@ -312,7 +312,7 @@ async function runTests() {
 
   // 16. AI 工具调用循环（本地 Engine，Stubbed OpenAI Client）
   let callTurn = 0;
-  engineHongchen.setClientForTest({
+  engineHongchen.设置客户端用于测试({
     chat: {
       completions: {
         create: async () => {
@@ -358,17 +358,17 @@ async function runTests() {
 
   let aiAnswer = "";
   let aiUsage = null;
-  hub.startRun("hongchen", 1001, "Cek respons echo", {
-    onChunk: () => {},
-    onApprovalReq: () => {},
-    onDone: (res, _err, usage) => {
+  hub.启动运行("hongchen", 1001, "Cek respons echo", {
+    当块: () => {},
+    当审批请求: () => {},
+    当完成: (res, _err, usage) => {
       aiAnswer = res;
       aiUsage = usage;
     },
   });
   await sleep(500);
   assert.ok(aiAnswer.includes("halo-dari-ai"), "AI loop harus mengeksekusi tool dan merangkum hasil");
-  assert.strictEqual(aiUsage.promptTokens, 120);
+  assert.strictEqual(aiUsage.提示词令牌列表, 120);
   console.log("✓ 16. Loop AI tool-calling (engine=local) & pelacakan token usage bekerja sempurna");
 
   // 17. 内置 OpenCode 引擎（@opencode/cli 解析、会话管理、恢复与权限桥接）
@@ -451,15 +451,15 @@ async function runTests() {
 
   // 18. 中枢存储 持久化与 HTML 分块
   const store = new 中枢存储(statePath);
-  store.setActiveNode(1001, "hongyun");
-  store.remember(1001, "hongyun", "cek uptime", "Server nyala 10 hari");
-  store.addUsage(1001, { promptTokens: 100, completionTokens: 50 });
-  store.flush();
+  store.设置活跃节点(1001, "hongyun");
+  store.记住(1001, "hongyun", "cek uptime", "Server nyala 10 hari");
+  store.添加用量(1001, { 提示词令牌列表: 100, 补全令牌列表: 50 });
+  store.刷新();
 
   const storeReloaded = new 中枢存储(statePath);
-  assert.strictEqual(storeReloaded.getActiveNode(1001), "hongyun");
-  assert.strictEqual(storeReloaded.getHistory(1001, "hongyun").length, 2);
-  assert.strictEqual(storeReloaded.getUsage(1001).promptTokens, 100);
+  assert.strictEqual(storeReloaded.获取活跃节点(1001), "hongyun");
+  assert.strictEqual(storeReloaded.获取历史(1001, "hongyun").length, 2);
+  assert.strictEqual(storeReloaded.获取用量(1001).提示词令牌列表, 100);
 
   const htmlChunks = chunkHtml(markdownToHtml("```bash\n" + "a".repeat(5000) + "\n```"), 2000);
   assert.ok(htmlChunks.length >= 3, "Pesan panjang harus dipecah menjadi beberapa chunk");
@@ -467,22 +467,22 @@ async function runTests() {
   console.log("✓ 18. Persistensi 中枢存储 (mode 0600) & HTML chunking aman terverifikasi");
 
   // 19. 自动断开与重连
-  clientHongyun.stop();
+  clientHongyun.停止();
   await sleep(350);
-  assert.strictEqual(hub.listNodes().length, 1, "Tersisa 1 node setelah hongyun disconnect");
-  assert.strictEqual(hub.listNodes()[0].nodeId, "hongchen");
+  assert.strictEqual(hub.列出节点列表().length, 1, "Tersisa 1 node setelah hongyun disconnect");
+  assert.strictEqual(hub.列出节点列表()[0].节点标识, "hongchen");
   console.log("✓ 19. Deteksi disconnect node realtime");
 
-  clientHongyun.start();
+  clientHongyun.启动();
   await sleep(500);
-  assert.strictEqual(hub.listNodes().length, 2, "2 node kembali online setelah reconnect");
+  assert.strictEqual(hub.列出节点列表().length, 2, "2 node kembali online setelah reconnect");
   console.log("✓ 20. Reconnect otomatis node sukses");
 
   // 21. 审计链损坏检测（Tamper Detection）
   fs.appendFileSync(auditHongyun, '{"ts":"2026-01-01","nodeId":"hongyun","command":"hack","prevHash":" SALAH","hash":"123"}\n');
-  const tamperedVerify = execHongyun.verifyAudit();
-  assert.strictEqual(tamperedVerify.ok, false, "Audit verifier harus mendeteksi baris yang dimanipulasi");
-  console.log("✓ 21. Tamper-detection mendeteksi manipulasi file audit pada baris ke-" + tamperedVerify.brokenAt);
+  const tamperedVerify = execHongyun.验证审计();
+  assert.strictEqual(tamperedVerify.是否成功, false, "Audit verifier harus mendeteksi baris yang dimanipulasi");
+  console.log("✓ 21. Tamper-detection mendeteksi manipulasi file audit pada baris ke-" + tamperedVerify.损坏位于);
 
   // 22. ECC (Everything Claude Code) 集成：Skills、Agents、Commands、Trigger-Table、OpenCode Provisioning 与 RPC
   const eccSkills = listEccSkills();
@@ -514,19 +514,19 @@ async function runTests() {
   }
 
   const eccRpcOut = await new Promise((resolve, reject) => {
-    hub.startRun("hongchen", 1001, "__builtin:ecc:status", {
-      onChunk: () => {},
-      onApprovalReq: () => {},
-      onDone: (fullText, err) => (err ? reject(new Error(err)) : resolve(fullText)),
+    hub.启动运行("hongchen", 1001, "__builtin:ecc:status", {
+      当块: () => {},
+      当审批请求: () => {},
+      当完成: (fullText, err) => (err ? reject(new Error(err)) : resolve(fullText)),
     });
   });
   assert.ok(eccRpcOut.includes("ECC (Everything Claude Code) Integration"), "RPC __builtin:ecc:status harus mengembalikan status ECC");
   console.log(`✓ 22. Integrasi ECC (${eccSkills.length} skills, ${eccAgents.length} agents, ${eccCommands.length} commands, trigger-table & OpenCode provisioning) lulus`);
 
   // 清理
-  clientHongyun.stop();
-  clientHongchen.stop();
-  await hub.stop();
+  clientHongyun.停止();
+  clientHongchen.停止();
+  await hub.停止();
   fs.rmSync(auditHongyun, { force: true });
   fs.rmSync(auditHongchen, { force: true });
   fs.rmSync(statePath, { force: true });

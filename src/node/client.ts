@@ -1,303 +1,271 @@
 import WebSocket, { RawData } from "ws";
 import * as os from "os";
 import * as fs from "fs";
-import {
-  NodeInfo,
-  NodeToHubMsg,
-  HubToNodeMsg,
-  TokenUsage,
-} from "../shared/protocol";
-import { 节点引擎, ABORTED } from "./engine";
-import { distro } from "./distro";
-import { isRoot } from "./executor";
-import { 节点告警监控器, NodeAlertConfig } from "./alerts";
-
-export interface 节点客户端Config {
-  hubUrl: string;
-  nodeId: string;
-  token: string;
-  heartbeatIntervalMs?: number;
-  reconnectDelayMs?: number;
-  approvalTimeoutMs?: number;
-  tlsCaPath?: string;
-  tlsRejectUnauthorized?: boolean;
-  alerts?: NodeAlertConfig;
+import { 节点信息, 节点到中枢消息, 中枢到节点消息, 令牌用量, } from "../shared/protocol";
+import { 节点引擎, 中止状态 } from "./engine";
+import { 发行版 } from "./distro";
+import { 是否根 } from "./executor";
+import { 节点告警监控器, 节点告警配置 } from "./alerts";
+export interface 节点客户端配置 {
+    中枢地址: string;
+    节点标识: string;
+    令牌: string;
+    心跳间隔毫秒?: number;
+    重连延迟毫秒?: number;
+    审批超时毫秒?: number;
+    传输层安全证书颁发机构路径?: string;
+    传输层安全拒绝未授权?: boolean;
+    告警列表?: 节点告警配置;
 }
-
 export class 节点客户端 {
-  private config: 节点客户端Config;
-  private engine: 节点引擎;
-  private ws: WebSocket | null = null;
-  private heartbeatTimer: NodeJS.Timeout | null = null;
-  private reconnectTimer: NodeJS.Timeout | null = null;
-  private alertMonitor: 节点告警监控器 | null = null;
-  private isClosed: boolean = false;
-  private pendingApprovals = new Map<string, (approved: boolean) => void>();
-  private activeRuns = new Map<string, AbortController>();
-
-  constructor(config: 节点客户端Config, engine: 节点引擎, alertMonitor?: 节点告警监控器) {
-    this.config = config;
-    this.engine = engine;
-    this.alertMonitor = alertMonitor ?? null;
-  }
-
-  private collectNodeInfo(): NodeInfo {
-    const totalMem = Math.round(os.totalmem() / (1024 * 1024));
-    const freeMem = Math.round(os.freemem() / (1024 * 1024));
-    return {
-      hostname: os.hostname(),
-      platform: os.platform(),
-      arch: os.arch(),
-      uptime: Math.round(os.uptime()),
-      loadAvg: os.loadavg(),
-      memory: {
-        totalMb: totalMem,
-        freeMb: freeMem,
-      },
-      distro,
-      kernel: os.release(),
-      cpus: os.cpus().length,
-      isRoot,
-    };
-  }
-
-  start(): void {
-    this.isClosed = false;
-    this.connect();
-    this.alertMonitor?.start();
-  }
-
-  stop(): void {
-    this.isClosed = true;
-    this.alertMonitor?.stop();
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
+    private 配置: 节点客户端配置;
+    private 引擎: 节点引擎;
+    private 网络套接字: WebSocket | null = null;
+    private 心跳定时器: NodeJS.Timeout | null = null;
+    private 重连定时器: NodeJS.Timeout | null = null;
+    private 告警监控器: 节点告警监控器 | null = null;
+    private 是否已关闭: boolean = false;
+    private 待处理审批列表 = new Map<string, (已批准: boolean) => void>();
+    private 活跃运行列表 = new Map<string, AbortController>();
+    constructor(配置: 节点客户端配置, 引擎: 节点引擎, 告警监控器?: 节点告警监控器) {
+        this.配置 = 配置;
+        this.引擎 = 引擎;
+        this.告警监控器 = 告警监控器 ?? null;
     }
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    for (const [, controller] of this.activeRuns) {
-      controller.abort();
-    }
-    this.activeRuns.clear();
-    for (const [, resolver] of this.pendingApprovals) {
-      resolver(false);
-    }
-    this.pendingApprovals.clear();
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
-  }
-
-  sendAlert(key: string, severity: "warn" | "ok", html: string): boolean {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
-    this.send({
-      type: "node_alert",
-      nodeId: this.config.nodeId,
-      key,
-      severity,
-      html,
-    });
-    return true;
-  }
-
-  private connect(): void {
-    if (this.isClosed) return;
-
-    console.log(`[node:${this.config.nodeId}] Konek ke Hub di ${this.config.hubUrl}...`);
-    const wsOpts: WebSocket.ClientOptions = {};
-    if (this.config.tlsCaPath && fs.existsSync(this.config.tlsCaPath)) {
-      wsOpts.ca = fs.readFileSync(this.config.tlsCaPath);
-    }
-    if (this.config.tlsRejectUnauthorized !== undefined) {
-      wsOpts.rejectUnauthorized = this.config.tlsRejectUnauthorized;
-    }
-
-    const ws = new WebSocket(this.config.hubUrl, wsOpts);
-    this.ws = ws;
-
-    ws.on("open", () => {
-      console.log(`[node:${this.config.nodeId}] Terhubung ke Hub. Mengirim handshake hello...`);
-      const hello: NodeToHubMsg = {
-        type: "node_hello",
-        nodeId: this.config.nodeId,
-        token: this.config.token,
-        info: this.collectNodeInfo(),
-      };
-      ws.send(JSON.stringify(hello));
-
-      if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-          const info = this.collectNodeInfo();
-          const hb: NodeToHubMsg = {
-            type: "node_heartbeat",
-            nodeId: this.config.nodeId,
-            uptime: info.uptime,
-            loadAvg: info.loadAvg,
-            memory: info.memory,
-          };
-          ws.send(JSON.stringify(hb));
-        }
-      }, this.config.heartbeatIntervalMs || 15_000);
-      this.heartbeatTimer.unref?.();
-    });
-
-    ws.on("message", async (raw: RawData) => {
-      try {
-        const msg = JSON.parse(raw.toString()) as HubToNodeMsg;
-        await this.handleHubMessage(msg);
-      } catch (err: any) {
-        console.error(`[node:${this.config.nodeId}] Gagal parse pesan hub:`, err.message);
-      }
-    });
-
-    ws.on("close", () => {
-      if (this.heartbeatTimer) {
-        clearInterval(this.heartbeatTimer);
-        this.heartbeatTimer = null;
-      }
-      console.log(`[node:${this.config.nodeId}] Sambungan ke Hub terputus.`);
-      if (!this.isClosed) {
-        const delay = this.config.reconnectDelayMs ?? 3000;
-        this.reconnectTimer = setTimeout(() => this.connect(), delay);
-      }
-    });
-
-    ws.on("error", (err) => {
-      console.error(`[node:${this.config.nodeId}] Socket error:`, err.message);
-    });
-  }
-
-  private async handleHubMessage(msg: HubToNodeMsg): Promise<void> {
-    if (msg.type === "hub_welcome") {
-      if (msg.success) {
-        console.log(`[node:${this.config.nodeId}] Handshake sukses: ${msg.message}`);
-      } else {
-        console.error(`[node:${this.config.nodeId}] Handshake DITOLAK: ${msg.message}`);
-        this.stop();
-      }
-      return;
-    }
-
-    if (msg.type === "hub_approval_res") {
-      const resolver = this.pendingApprovals.get(msg.approvalId);
-      if (resolver) {
-        resolver(msg.approved);
-        this.pendingApprovals.delete(msg.approvalId);
-      }
-      return;
-    }
-
-    if (msg.type === "hub_cancel") {
-      const controller = this.activeRuns.get(msg.runId);
-      if (controller) {
-        console.log(`[node:${this.config.nodeId}] Membatalkan run [${msg.runId}]...`);
-        controller.abort();
-        this.activeRuns.delete(msg.runId);
-      }
-      return;
-    }
-
-    if (msg.type === "hub_ping") {
-      this.send({ type: "node_pong", timestamp: Date.now() });
-      return;
-    }
-
-    if (msg.type === "hub_run") {
-      const { runId, prompt, model, history, chatId, userId } = msg;
-      console.log(`[node:${this.config.nodeId}] Menerima run [${runId}]: "${prompt.slice(0, 60)}"`);
-
-      const controller = new AbortController();
-      this.activeRuns.set(runId, controller);
-
-      const approvalTimeoutMs = this.config.approvalTimeoutMs ?? 300_000;
-      const requestApproval = (command: string, reason: string): Promise<boolean> => {
-        return new Promise<boolean>((resolve) => {
-          if (controller.signal.aborted) {
-            resolve(false);
-            return;
-          }
-
-          const approvalId = `appr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-          const onAbort = () => {
-            if (this.pendingApprovals.has(approvalId)) {
-              this.pendingApprovals.delete(approvalId);
-              resolve(false);
-            }
-          };
-          controller.signal.addEventListener("abort", onAbort, { once: true });
-
-          this.pendingApprovals.set(approvalId, (approved: boolean) => {
-            controller.signal.removeEventListener("abort", onAbort);
-            resolve(approved);
-          });
-
-          this.send({
-            type: "node_approval_req",
-            runId,
-            approvalId,
-            command,
-            reason,
-          });
-
-          const timer = setTimeout(() => {
-            if (this.pendingApprovals.has(approvalId)) {
-              this.pendingApprovals.delete(approvalId);
-              controller.signal.removeEventListener("abort", onAbort);
-              resolve(false);
-            }
-          }, approvalTimeoutMs);
-          timer.unref?.();
-        });
-      };
-
-      let usage: TokenUsage | undefined;
-      try {
-        const fullText = await this.engine.run(
-          prompt,
-          (chunk) => {
-            this.send({ type: "node_chunk", runId, chunk });
-          },
-          requestApproval,
-          model,
-          {
-            signal: controller.signal,
-            history,
-            chatId,
-            userId,
-            onUsage: (u) => {
-              usage = u;
+    private 收集节点信息(): 节点信息 {
+        const 总计内存 = Math.round(os.totalmem() / (1024 * 1024));
+        const 空闲内存 = Math.round(os.freemem() / (1024 * 1024));
+        return {
+            主机名: os.hostname(),
+            平台: os.platform(),
+            架构: os.arch(),
+            运行时长: Math.round(os.uptime()),
+            加载平均值: os.loadavg(),
+            记忆: {
+                总计兆字节: 总计内存,
+                空闲兆字节: 空闲内存,
             },
-          }
-        );
-
-        this.send({
-          type: "node_done",
-          runId,
-          fullText,
-          ...(usage ? { usage } : {}),
-        });
-      } catch (err: any) {
-        const isAborted = err?.message === ABORTED || controller.signal.aborted;
-        this.send({
-          type: "node_done",
-          runId,
-          fullText: isAborted ? `[${this.config.nodeId}] ⏹ Tugas dihentikan oleh operator.` : `Error di node: ${err.message}`,
-          error: isAborted ? ABORTED : err.message,
-        });
-      } finally {
-        this.activeRuns.delete(runId);
-      }
+            发行版,
+            内核: os.release(),
+            处理器数量: os.cpus().length,
+            是否根,
+        };
     }
-  }
-
-  private send(msg: NodeToHubMsg): void {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
+    启动(): void {
+        this.是否已关闭 = false;
+        this.连接();
+        this.告警监控器?.启动();
     }
-  }
+    停止(): void {
+        this.是否已关闭 = true;
+        this.告警监控器?.停止();
+        if (this.心跳定时器) {
+            clearInterval(this.心跳定时器);
+            this.心跳定时器 = null;
+        }
+        if (this.重连定时器) {
+            clearTimeout(this.重连定时器);
+            this.重连定时器 = null;
+        }
+        for (const [, 控制器] of this.活跃运行列表) {
+            控制器.abort();
+        }
+        this.活跃运行列表.clear();
+        for (const [, 解析器] of this.待处理审批列表) {
+            解析器(false);
+        }
+        this.待处理审批列表.clear();
+        if (this.网络套接字) {
+            this.网络套接字.close();
+            this.网络套接字 = null;
+        }
+    }
+    发送告警(键: string, 严重度: "warn" | "ok", 超文本标记: string): boolean {
+        if (!this.网络套接字 || this.网络套接字.readyState !== WebSocket.OPEN)
+            return false;
+        this.发送({
+            类型: "node_alert",
+            节点标识: this.配置.节点标识,
+            键,
+            严重度,
+            超文本标记,
+        });
+        return true;
+    }
+    private 连接(): void {
+        if (this.是否已关闭)
+            return;
+        console.log(`[node:${this.配置.节点标识}] Konek ke Hub di ${this.配置.中枢地址}...`);
+        const 网络套接字选项: WebSocket.ClientOptions = {};
+        if (this.配置.传输层安全证书颁发机构路径 && fs.existsSync(this.配置.传输层安全证书颁发机构路径)) {
+            网络套接字选项.ca = fs.readFileSync(this.配置.传输层安全证书颁发机构路径);
+        }
+        if (this.配置.传输层安全拒绝未授权 !== undefined) {
+            网络套接字选项.rejectUnauthorized = this.配置.传输层安全拒绝未授权;
+        }
+        const 网络套接字 = new WebSocket(this.配置.中枢地址, 网络套接字选项);
+        this.网络套接字 = 网络套接字;
+        网络套接字.on("open", () => {
+            console.log(`[node:${this.配置.节点标识}] Terhubung ke Hub. Mengirim handshake hello...`);
+            const 你好: 节点到中枢消息 = {
+                类型: "node_hello",
+                节点标识: this.配置.节点标识,
+                令牌: this.配置.令牌,
+                信息: this.收集节点信息(),
+            };
+            网络套接字.send(JSON.stringify(你好));
+            if (this.心跳定时器)
+                clearInterval(this.心跳定时器);
+            this.心跳定时器 = setInterval(() => {
+                if (网络套接字.readyState === WebSocket.OPEN) {
+                    const 信息 = this.收集节点信息();
+                    const 心跳: 节点到中枢消息 = {
+                        类型: "node_heartbeat",
+                        节点标识: this.配置.节点标识,
+                        运行时长: 信息.运行时长,
+                        加载平均值: 信息.加载平均值,
+                        记忆: 信息.记忆,
+                    };
+                    网络套接字.send(JSON.stringify(心跳));
+                }
+            }, this.配置.心跳间隔毫秒 || 15000);
+            this.心跳定时器.unref?.();
+        });
+        网络套接字.on("message", async (原始: RawData) => {
+            try {
+                const 消息文本 = JSON.parse(原始.toString()) as 中枢到节点消息;
+                await this.处理中枢消息(消息文本);
+            }
+            catch (错误对象: any) {
+                console.error(`[node:${this.配置.节点标识}] Gagal parse pesan hub:`, 错误对象.message);
+            }
+        });
+        网络套接字.on("close", () => {
+            if (this.心跳定时器) {
+                clearInterval(this.心跳定时器);
+                this.心跳定时器 = null;
+            }
+            console.log(`[node:${this.配置.节点标识}] Sambungan ke Hub terputus.`);
+            if (!this.是否已关闭) {
+                const 延迟 = this.配置.重连延迟毫秒 ?? 3000;
+                this.重连定时器 = setTimeout(() => this.连接(), 延迟);
+            }
+        });
+        网络套接字.on("error", (错误对象) => {
+            console.error(`[node:${this.配置.节点标识}] Socket error:`, 错误对象.message);
+        });
+    }
+    private async 处理中枢消息(消息文本: 中枢到节点消息): Promise<void> {
+        if (消息文本.类型 === "hub_welcome") {
+            if (消息文本.成功) {
+                console.log(`[node:${this.配置.节点标识}] Handshake sukses: ${消息文本.消息内容}`);
+            }
+            else {
+                console.error(`[node:${this.配置.节点标识}] Handshake DITOLAK: ${消息文本.消息内容}`);
+                this.停止();
+            }
+            return;
+        }
+        if (消息文本.类型 === "hub_approval_res") {
+            const 解析器 = this.待处理审批列表.get(消息文本.审批标识);
+            if (解析器) {
+                解析器(消息文本.已批准);
+                this.待处理审批列表.delete(消息文本.审批标识);
+            }
+            return;
+        }
+        if (消息文本.类型 === "hub_cancel") {
+            const 控制器 = this.活跃运行列表.get(消息文本.运行标识);
+            if (控制器) {
+                console.log(`[node:${this.配置.节点标识}] Membatalkan run [${消息文本.运行标识}]...`);
+                控制器.abort();
+                this.活跃运行列表.delete(消息文本.运行标识);
+            }
+            return;
+        }
+        if (消息文本.类型 === "hub_ping") {
+            this.发送({ 类型: "node_pong", 时间戳: Date.now() });
+            return;
+        }
+        if (消息文本.类型 === "hub_run") {
+            const { 运行标识, 提示词, 模型, 历史, 聊天标识, 用户标识 } = 消息文本;
+            console.log(`[node:${this.配置.节点标识}] Menerima run [${运行标识}]: "${提示词.slice(0, 60)}"`);
+            const 控制器 = new AbortController();
+            this.活跃运行列表.set(运行标识, 控制器);
+            const 审批超时毫秒 = this.配置.审批超时毫秒 ?? 300000;
+            const 请求审批 = (命令: string, 原因: string): Promise<boolean> => {
+                return new Promise<boolean>((解析) => {
+                    if (控制器.signal.aborted) {
+                        解析(false);
+                        return;
+                    }
+                    const 审批标识 = `appr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+                    const 当中止 = () => {
+                        if (this.待处理审批列表.has(审批标识)) {
+                            this.待处理审批列表.delete(审批标识);
+                            解析(false);
+                        }
+                    };
+                    控制器.signal.addEventListener("abort", 当中止, { once: true });
+                    this.待处理审批列表.set(审批标识, (已批准: boolean) => {
+                        控制器.signal.removeEventListener("abort", 当中止);
+                        解析(已批准);
+                    });
+                    this.发送({
+                        类型: "node_approval_req",
+                        运行标识,
+                        审批标识,
+                        命令,
+                        原因,
+                    });
+                    const 定时器 = setTimeout(() => {
+                        if (this.待处理审批列表.has(审批标识)) {
+                            this.待处理审批列表.delete(审批标识);
+                            控制器.signal.removeEventListener("abort", 当中止);
+                            解析(false);
+                        }
+                    }, 审批超时毫秒);
+                    定时器.unref?.();
+                });
+            };
+            let 用量: 令牌用量 | undefined;
+            try {
+                const 完整文本 = await this.引擎.运行(提示词, (数据块) => {
+                    this.发送({ 类型: "node_chunk", 运行标识, 数据块 });
+                }, 请求审批, 模型, {
+                    信号: 控制器.signal,
+                    历史,
+                    聊天标识,
+                    用户标识,
+                    当用量: (用户) => {
+                        用量 = 用户;
+                    },
+                });
+                this.发送({
+                    类型: "node_done",
+                    运行标识,
+                    完整文本,
+                    ...(用量 ? { 用量 } : {}),
+                });
+            }
+            catch (错误对象: any) {
+                const 是否已中止 = 错误对象?.message === 中止状态 || 控制器.signal.aborted;
+                this.发送({
+                    类型: "node_done",
+                    运行标识,
+                    完整文本: 是否已中止 ? `[${this.配置.节点标识}] ⏹ Tugas dihentikan oleh operator.` : `Error di node: ${错误对象.message}`,
+                    错误: 是否已中止 ? 中止状态 : 错误对象.message,
+                });
+            }
+            finally {
+                this.活跃运行列表.delete(运行标识);
+            }
+        }
+    }
+    private 发送(消息文本: 节点到中枢消息): void {
+        if (this.网络套接字 && this.网络套接字.readyState === WebSocket.OPEN) {
+            this.网络套接字.send(JSON.stringify(消息文本));
+        }
+    }
 }
+

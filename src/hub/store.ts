@@ -1,152 +1,147 @@
 import * as fs from "fs";
 import * as path from "path";
-import { ChatHistoryItem, TokenUsage } from "../shared/protocol";
-
-export interface UsageStats {
-  requests: number;
-  promptTokens: number;
-  completionTokens: number;
+import { 聊天历史项目, 令牌用量 } from "../shared/protocol";
+export interface 用量统计 {
+    请求列表: number;
+    提示词令牌列表: number;
+    补全令牌列表: number;
+}
+export interface 中枢已持久化状态 {
+    活跃节点列表: Record<string, string>;
+    历史列表: Record<string, 聊天历史项目[]>;
+    模型列表: Record<string, string>;
+    用量: Record<string, 用量统计>;
+}
+export class 中枢存储类 {
+    private 文件路径: string;
+    private 状态值: 中枢已持久化状态 = {
+        活跃节点列表: {},
+        历史列表: {},
+        模型列表: {},
+        用量: {},
+    };
+    private 保存定时器: NodeJS.Timeout | null = null;
+    private 记忆轮次: number;
+    private 记忆字符: number;
+    constructor(文件路径: string, 选项集?: {
+        记忆轮次?: number;
+        记忆字符?: number;
+    }) {
+        this.文件路径 = 文件路径;
+        this.记忆轮次 = 选项集?.记忆轮次 ?? 4;
+        this.记忆字符 = 选项集?.记忆字符 ?? 400;
+        this.加载();
+    }
+    private 加载(): void {
+        try {
+            if (!fs.existsSync(this.文件路径))
+                return;
+            const 原始 = fs.readFileSync(this.文件路径, "utf8");
+            const 已解析 = JSON.parse(原始) as Partial<中枢已持久化状态>;
+            this.状态值 = {
+                活跃节点列表: 已解析.活跃节点列表 ?? {},
+                历史列表: 已解析.历史列表 ?? {},
+                模型列表: 已解析.模型列表 ?? {},
+                用量: 已解析.用量 ?? {},
+            };
+        }
+        catch {
+            this.状态值 = { 活跃节点列表: {}, 历史列表: {}, 模型列表: {}, 用量: {} };
+        }
+    }
+    private 调度保存(): void {
+        if (this.保存定时器 !== null)
+            return;
+        this.保存定时器 = setTimeout(() => {
+            this.保存定时器 = null;
+            this.刷新();
+        }, 1000);
+        this.保存定时器.unref?.();
+    }
+    刷新(): void {
+        try {
+            if (this.保存定时器) {
+                clearTimeout(this.保存定时器);
+                this.保存定时器 = null;
+            }
+            const 目录 = path.dirname(path.resolve(this.文件路径));
+            fs.mkdirSync(目录, { recursive: true, mode: 0o700 });
+            const 临时 = `${this.文件路径}.tmp`;
+            fs.writeFileSync(临时, JSON.stringify(this.状态值, null, 2), { mode: 0o600 });
+            try {
+                fs.chmodSync(临时, 0o600);
+            }
+            catch {
+                // 忽略
+            }
+            fs.renameSync(临时, this.文件路径);
+        }
+        catch (错误对象: any) {
+            console.error("[hub:store] Gagal menyimpan state:", 错误对象.message);
+        }
+    }
+    获取活跃节点(聊天标识: number): string | undefined {
+        return this.状态值.活跃节点列表[String(聊天标识)];
+    }
+    设置活跃节点(聊天标识: number, 节点标识: string | null): void {
+        if (节点标识 === null) {
+            delete this.状态值.活跃节点列表[String(聊天标识)];
+        }
+        else {
+            this.状态值.活跃节点列表[String(聊天标识)] = 节点标识;
+        }
+        this.调度保存();
+    }
+    获取历史(聊天标识: number, 节点标识: string): 聊天历史项目[] {
+        return this.状态值.历史列表[`${聊天标识}:${节点标识}`] ?? [];
+    }
+    记住(聊天标识: number, 节点标识: string, 提示词: string, 回复: string): void {
+        const 键 = `${聊天标识}:${节点标识}`;
+        const 列出 = [...(this.状态值.历史列表[键] ?? [])];
+        const 简洁回复 = 回复.replace(/\s+/g, " ").trim().slice(0, this.记忆字符);
+        列出.push({ 角色: "user", 内容: 提示词.slice(0, this.记忆字符) }, { 角色: "assistant", 内容: 简洁回复 });
+        const 最大项目列表 = Math.max(2, this.记忆轮次 * 2);
+        while (列出.length > 最大项目列表)
+            列出.shift();
+        this.状态值.历史列表[键] = 列出;
+        this.调度保存();
+    }
+    重置聊天(聊天标识: number, 节点标识?: string): void {
+        if (节点标识) {
+            delete this.状态值.历史列表[`${聊天标识}:${节点标识}`];
+        }
+        else {
+            for (const 键 of Object.keys(this.状态值.历史列表)) {
+                if (键.startsWith(`${聊天标识}:`))
+                    delete this.状态值.历史列表[键];
+            }
+        }
+        delete this.状态值.用量[String(聊天标识)];
+        this.调度保存();
+    }
+    获取模型覆盖(聊天标识: number): string | undefined {
+        return this.状态值.模型列表[String(聊天标识)];
+    }
+    设置模型覆盖(聊天标识: number, 模型: string | null): void {
+        if (模型 === null) {
+            delete this.状态值.模型列表[String(聊天标识)];
+        }
+        else {
+            this.状态值.模型列表[String(聊天标识)] = 模型;
+        }
+        this.调度保存();
+    }
+    添加用量(聊天标识: number, 用量: 令牌用量): void {
+        const 键 = String(聊天标识);
+        const 当前 = this.状态值.用量[键] ?? { 请求列表: 0, 提示词令牌列表: 0, 补全令牌列表: 0 };
+        当前.请求列表 += 1;
+        当前.提示词令牌列表 += 用量.提示词令牌列表;
+        当前.补全令牌列表 += 用量.补全令牌列表;
+        this.状态值.用量[键] = 当前;
+        this.调度保存();
+    }
+    获取用量(聊天标识: number): 用量统计 {
+        return this.状态值.用量[String(聊天标识)] ?? { 请求列表: 0, 提示词令牌列表: 0, 补全令牌列表: 0 };
+    }
 }
 
-export interface HubPersistedState {
-  activeNodes: Record<string, string>;
-  histories: Record<string, ChatHistoryItem[]>;
-  models: Record<string, string>;
-  usage: Record<string, UsageStats>;
-}
-
-export class 中枢存储 {
-  private filePath: string;
-  private state: HubPersistedState = {
-    activeNodes: {},
-    histories: {},
-    models: {},
-    usage: {},
-  };
-  private saveTimer: NodeJS.Timeout | null = null;
-  private memoryTurns: number;
-  private memoryChars: number;
-
-  constructor(filePath: string, opts?: { memoryTurns?: number; memoryChars?: number }) {
-    this.filePath = filePath;
-    this.memoryTurns = opts?.memoryTurns ?? 4;
-    this.memoryChars = opts?.memoryChars ?? 400;
-    this.load();
-  }
-
-  private load(): void {
-    try {
-      if (!fs.existsSync(this.filePath)) return;
-      const raw = fs.readFileSync(this.filePath, "utf8");
-      const parsed = JSON.parse(raw) as Partial<HubPersistedState>;
-      this.state = {
-        activeNodes: parsed.activeNodes ?? {},
-        histories: parsed.histories ?? {},
-        models: parsed.models ?? {},
-        usage: parsed.usage ?? {},
-      };
-    } catch {
-      this.state = { activeNodes: {}, histories: {}, models: {}, usage: {} };
-    }
-  }
-
-  private scheduleSave(): void {
-    if (this.saveTimer !== null) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      this.flush();
-    }, 1000);
-    this.saveTimer.unref?.();
-  }
-
-  flush(): void {
-    try {
-      if (this.saveTimer) {
-        clearTimeout(this.saveTimer);
-        this.saveTimer = null;
-      }
-      const dir = path.dirname(path.resolve(this.filePath));
-      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const tmp = `${this.filePath}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(this.state, null, 2), { mode: 0o600 });
-      try {
-        fs.chmodSync(tmp, 0o600);
-      } catch {
-        // 忽略
-      }
-      fs.renameSync(tmp, this.filePath);
-    } catch (err: any) {
-      console.error("[hub:store] Gagal menyimpan state:", err.message);
-    }
-  }
-
-  getActiveNode(chatId: number): string | undefined {
-    return this.state.activeNodes[String(chatId)];
-  }
-
-  setActiveNode(chatId: number, nodeId: string | null): void {
-    if (nodeId === null) {
-      delete this.state.activeNodes[String(chatId)];
-    } else {
-      this.state.activeNodes[String(chatId)] = nodeId;
-    }
-    this.scheduleSave();
-  }
-
-  getHistory(chatId: number, nodeId: string): ChatHistoryItem[] {
-    return this.state.histories[`${chatId}:${nodeId}`] ?? [];
-  }
-
-  remember(chatId: number, nodeId: string, prompt: string, reply: string): void {
-    const key = `${chatId}:${nodeId}`;
-    const list = [...(this.state.histories[key] ?? [])];
-    const conciseReply = reply.replace(/\s+/g, " ").trim().slice(0, this.memoryChars);
-    list.push(
-      { role: "user", content: prompt.slice(0, this.memoryChars) },
-      { role: "assistant", content: conciseReply }
-    );
-    const maxItems = Math.max(2, this.memoryTurns * 2);
-    while (list.length > maxItems) list.shift();
-    this.state.histories[key] = list;
-    this.scheduleSave();
-  }
-
-  resetChat(chatId: number, nodeId?: string): void {
-    if (nodeId) {
-      delete this.state.histories[`${chatId}:${nodeId}`];
-    } else {
-      for (const key of Object.keys(this.state.histories)) {
-        if (key.startsWith(`${chatId}:`)) delete this.state.histories[key];
-      }
-    }
-    delete this.state.usage[String(chatId)];
-    this.scheduleSave();
-  }
-
-  getModelOverride(chatId: number): string | undefined {
-    return this.state.models[String(chatId)];
-  }
-
-  setModelOverride(chatId: number, model: string | null): void {
-    if (model === null) {
-      delete this.state.models[String(chatId)];
-    } else {
-      this.state.models[String(chatId)] = model;
-    }
-    this.scheduleSave();
-  }
-
-  addUsage(chatId: number, usage: TokenUsage): void {
-    const key = String(chatId);
-    const current = this.state.usage[key] ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
-    current.requests += 1;
-    current.promptTokens += usage.promptTokens;
-    current.completionTokens += usage.completionTokens;
-    this.state.usage[key] = current;
-    this.scheduleSave();
-  }
-
-  getUsage(chatId: number): UsageStats {
-    return this.state.usage[String(chatId)] ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
-  }
-}
