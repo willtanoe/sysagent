@@ -262,7 +262,12 @@ async function runTests() {
     });
   });
   assert.ok(statusOut.includes("load") && statusOut.includes("mem") && statusOut.includes("disk"));
-  console.log("✓ 13. Dashboard monospace /status berhasil dibangun dari node");
+  assert.ok(
+    statusOut.includes("avail") && statusOut.includes("buff/cache") && statusOut.includes("swap"),
+    "Status harus menampilkan detail memory lengkap (avail, buff/cache, swap)"
+  );
+  assert.ok(statusOut.includes("services ("), "Status harus menampilkan daftar service aktif beserta jumlahnya");
+  console.log("✓ 13. Dashboard monospace /status (service aktif + memory lengkap) berhasil dibangun dari node");
 
   // 14. Pembatalan Tugas (/stop -> hub_cancel -> kill process tree)
   let cancelErr = "";

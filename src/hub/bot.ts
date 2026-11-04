@@ -360,10 +360,13 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   bot.command("status", async (ctx) => {
     const arg = (ctx.match ?? "").trim();
     const current = hubStore.getActiveNode(ctx.chat.id);
-    const targetNodeId = arg && arg !== "all" ? arg : current;
+    const nodes = hub.listNodes();
+    const targetNodeId =
+      arg && arg !== "all"
+        ? arg
+        : current || (arg !== "all" && nodes.length === 1 ? nodes[0]?.nodeId : undefined);
 
     if (arg === "all" || !targetNodeId) {
-      const nodes = hub.listNodes();
       let text = `📊 <b>Ringkasan Fleet Aster Hub</b>\n`;
       text += `• Total node online: <b>${nodes.length}</b>\n`;
       text += `• Node aktif chat ini: <b>${escapeHtml(current || "(belum dipilih)")}</b>\n\n`;
@@ -371,10 +374,12 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       if (nodes.length > 0) {
         const rows = nodes.map((n) => {
           const load = n.info.loadAvg?.[0]?.toFixed(2) ?? "0.00";
-          const usedMb = Math.max(0, (n.info.memory?.totalMb ?? 0) - (n.info.memory?.freeMb ?? 0));
+          const freeMb = n.info.memory?.freeMb ?? 0;
           const totalMb = n.info.memory?.totalMb ?? 0;
+          const usedMb = Math.max(0, totalMb - freeMb);
+          const memPct = totalMb > 0 ? Math.round((usedMb / totalMb) * 100) : 0;
           const upH = `${Math.round((n.info.uptime ?? 0) / 3600)}h`;
-          return `${n.nodeId.padEnd(12)} load ${load.padStart(5)}  ram ${String(usedMb).padStart(5)}/${totalMb}M  up ${upH}`;
+          return `${n.nodeId.padEnd(12)} load ${load.padStart(5)}  ram ${String(usedMb).padStart(5)}/${totalMb}M (${String(memPct).padStart(2)}%, free ${freeMb}M)  up ${upH}`;
         });
         text += preBlock(rows.join("\n"));
       }
