@@ -165,7 +165,8 @@ Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfiguras
 | `/model [id\|reset]` | Melihat atau mengganti model AI untuk chat ini |
 | `/usage` | Menampilkan statistik pemakaian token AI pada chat ini |
 | `/reset` | Menghapus riwayat percakapan, sesi OpenCode, dan statistik token untuk node aktif |
-| `/id` | Menampilkan Telegram User ID dan Chat ID |
+| `/topic [here\|off\|menu off]` | Mengunci bot agar hanya aktif di 1 Topic / Thread grup (serta opsi menyembunyikan popup `/` di grup) |
+| `/id` | Menampilkan Telegram User ID, Chat ID, dan Topic / Thread ID |
 | `/help` | Menampilkan panduan perintah lengkap |
 
 ---

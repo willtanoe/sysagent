@@ -13,6 +13,8 @@ export interface HubPersistedState {
   histories: Record<string, ChatHistoryItem[]>;
   models: Record<string, string>;
   usage: Record<string, UsageStats>;
+  allowedTopics?: Record<string, number>;
+  hiddenGroupMenus?: Record<string, boolean>;
 }
 
 export class HubStore {
@@ -22,6 +24,8 @@ export class HubStore {
     histories: {},
     models: {},
     usage: {},
+    allowedTopics: {},
+    hiddenGroupMenus: {},
   };
   private saveTimer: NodeJS.Timeout | null = null;
   private memoryTurns: number;
@@ -44,9 +48,18 @@ export class HubStore {
         histories: parsed.histories ?? {},
         models: parsed.models ?? {},
         usage: parsed.usage ?? {},
+        allowedTopics: parsed.allowedTopics ?? {},
+        hiddenGroupMenus: parsed.hiddenGroupMenus ?? {},
       };
     } catch {
-      this.state = { activeNodes: {}, histories: {}, models: {}, usage: {} };
+      this.state = {
+        activeNodes: {},
+        histories: {},
+        models: {},
+        usage: {},
+        allowedTopics: {},
+        hiddenGroupMenus: {},
+      };
     }
   }
 
@@ -148,5 +161,37 @@ export class HubStore {
 
   getUsage(chatId: number): UsageStats {
     return this.state.usage[String(chatId)] ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
+  }
+
+  getAllowedTopic(chatId: number): number | undefined {
+    return this.state.allowedTopics?.[String(chatId)];
+  }
+
+  setAllowedTopic(chatId: number, topicId: number | null): void {
+    if (!this.state.allowedTopics) this.state.allowedTopics = {};
+    if (topicId === null) {
+      delete this.state.allowedTopics[String(chatId)];
+    } else {
+      this.state.allowedTopics[String(chatId)] = topicId;
+    }
+    this.scheduleSave();
+  }
+
+  isGroupMenuHidden(chatId: number): boolean {
+    return Boolean(this.state.hiddenGroupMenus?.[String(chatId)]);
+  }
+
+  setGroupMenuHidden(chatId: number, hidden: boolean): void {
+    if (!this.state.hiddenGroupMenus) this.state.hiddenGroupMenus = {};
+    if (!hidden) {
+      delete this.state.hiddenGroupMenus[String(chatId)];
+    } else {
+      this.state.hiddenGroupMenus[String(chatId)] = true;
+    }
+    this.scheduleSave();
+  }
+
+  hasAnyHiddenGroupMenu(): boolean {
+    return Object.values(this.state.hiddenGroupMenus ?? {}).some(Boolean);
   }
 }

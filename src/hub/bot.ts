@@ -391,9 +391,39 @@ export interface BotConfig {
   botName?: string;
   allowedUsers: number[];
   allowedChats?: number[];
+  allowedTopics?: Record<string, number>;
+  defaultAllowedTopic?: number;
   defaultModel?: string;
   notifyNodeEvents?: boolean;
   hubNodeId?: string;
+}
+
+export function parseAllowedTopics(raw: string | undefined): {
+  byChat: Record<string, number>;
+  defaultTopic?: number;
+} {
+  const byChat: Record<string, number> = {};
+  let defaultTopic: number | undefined;
+  if (!raw) return { byChat };
+
+  for (const item of raw.split(",")) {
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    const colonIdx = trimmed.indexOf(":");
+    if (colonIdx > 0) {
+      const chatStr = trimmed.slice(0, colonIdx).trim();
+      const topicNum = Number(trimmed.slice(colonIdx + 1).trim());
+      if (chatStr && Number.isFinite(topicNum) && topicNum > 0) {
+        byChat[String(Number(chatStr))] = Math.trunc(topicNum);
+      }
+    } else {
+      const topicNum = Number(trimmed);
+      if (Number.isFinite(topicNum) && topicNum > 0) {
+        defaultTopic = Math.trunc(topicNum);
+      }
+    }
+  }
+  return { byChat, defaultTopic };
 }
 
 export const HUB_BOT_COMMANDS = [
@@ -420,7 +450,8 @@ export const HUB_BOT_COMMANDS = [
   { command: "model", description: "Lihat atau ganti model AI: /model [id|reset]" },
   { command: "usage", description: "Statistik pemakaian token chat ini" },
   { command: "reset", description: "Hapus riwayat percakapan di node aktif" },
-  { command: "id", description: "Tampilkan Telegram User ID & Chat ID" },
+  { command: "topic", description: "Kunci bot di 1 topic grup: /topic [here|off|menu off|menu on]" },
+  { command: "id", description: "Tampilkan Telegram User ID, Chat ID & Topic ID" },
 ];
 
 export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore): Bot {
@@ -430,6 +461,45 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   const defaultModel = config.defaultModel || process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash";
   const hubNodeId = config.hubNodeId || process.env.HUB_NODE_ID || "hub";
   const knownCommands = new Set(HUB_BOT_COMMANDS.map((c) => c.command.toLowerCase()));
+
+  function getMessageTopicId(ctx: Context): number | undefined {
+    const msg = (ctx.message ?? ctx.callbackQuery?.message) as any;
+    if (!msg) return undefined;
+    if (typeof msg.message_thread_id === "number" && (msg.is_topic_message || (ctx.chat as any)?.is_forum)) {
+      return msg.message_thread_id;
+    }
+    if ((ctx.chat as any)?.is_forum) {
+      return 1;
+    }
+    if (typeof msg.message_thread_id === "number") {
+      return msg.message_thread_id;
+    }
+    return undefined;
+  }
+
+  function getEffectiveAllowedTopic(chatId: number): number | undefined {
+    const persisted = hubStore.getAllowedTopic(chatId);
+    if (persisted !== undefined) {
+      return persisted > 0 ? persisted : undefined;
+    }
+    const fromChatMap = config.allowedTopics?.[String(chatId)];
+    if (fromChatMap !== undefined && fromChatMap > 0) {
+      return fromChatMap;
+    }
+    if (chatId < 0 && config.defaultAllowedTopic && config.defaultAllowedTopic > 0) {
+      return config.defaultAllowedTopic;
+    }
+    return undefined;
+  }
+
+  function isTopicManagementCommand(ctx: Context): boolean {
+    const text = ctx.message?.text?.trim();
+    if (!text || !text.startsWith("/")) return false;
+    const m = /^\/([A-Za-z0-9_]+)(?:@([A-Za-z0-9_]+))?(?:\s|$)/.exec(text);
+    if (!m) return false;
+    const cmdName = m[1]!.toLowerCase();
+    return cmdName === "topic" || cmdName === "id";
+  }
 
   function getBotUsernames(ctx: Context): string[] {
     const names = new Set<string>();
@@ -555,6 +625,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     (ev: { nodeId: string; runId: string; approvalId: string; command: string; reason: string; chatId?: number }) => {
       const targetChatId = ev.chatId && ev.chatId !== 0 ? ev.chatId : primaryAdmin;
       if (targetChatId === undefined) return;
+      const boundTopic = getEffectiveAllowedTopic(targetChatId);
       const kb = new InlineKeyboard()
         .text("✅ Setujui", `ap:${ev.approvalId}:yes`)
         .text("❌ Tolak", `ap:${ev.approvalId}:no`);
@@ -564,16 +635,39 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           `🔐 <b>[${escapeHtml(ev.nodeId)}] Konfirmasi Eksekusi (via OpenCode Hub)</b>\n` +
             `Alasan: ${escapeHtml(ev.reason)}\n` +
             `${preBlock(ev.command, "bash")}`,
-          { parse_mode: "HTML", reply_markup: kb }
+          {
+            parse_mode: "HTML",
+            reply_markup: kb,
+            ...(boundTopic && boundTopic > 1 ? { message_thread_id: boundTopic } : {}),
+          }
         )
         .catch((err) => console.error("[bot:remote-approval] Gagal kirim tombol approval:", err?.message));
     }
   );
 
-  // Middleware Filter Grup & Otorisasi
+  // Middleware Filter Grup, Topic & Otorisasi
   bot.use(async (ctx, next) => {
-    if (ctx.chat?.type !== "private" && !isGroupMessageAddressedToBot(ctx)) {
-      return;
+    if (ctx.chat?.type !== "private") {
+      if (!isGroupMessageAddressedToBot(ctx)) {
+        return;
+      }
+
+      // Jika grup dikunci ke 1 Topic tertentu, abaikan semua command/pesan dari topic lain
+      // (kecuali /topic dan /id agar admin tetap bisa mengecek ID atau memindahkan kunci topic)
+      if (!isTopicManagementCommand(ctx) && ctx.chat?.id !== undefined) {
+        const allowedTopic = getEffectiveAllowedTopic(ctx.chat.id);
+        if (allowedTopic !== undefined) {
+          const currentTopic = getMessageTopicId(ctx) ?? 1;
+          if (currentTopic !== allowedTopic) {
+            if (ctx.callbackQuery) {
+              await ctx
+                .answerCallbackQuery({ text: `⚠️ Bot hanya aktif di Topic #${allowedTopic}.` })
+                .catch(() => undefined);
+            }
+            return;
+          }
+        }
+      }
     }
 
     if (!isAuthorized(ctx)) {
@@ -770,9 +864,140 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   });
 
   bot.command("id", async (ctx) => {
+    const chatId = ctx.chat?.id;
+    const topicId = getMessageTopicId(ctx);
+    const lockedTopic = chatId !== undefined ? getEffectiveAllowedTopic(chatId) : undefined;
+    const lines = [
+      `👤 User ID: <code>${ctx.from?.id ?? "-"}</code>`,
+      `💬 Chat ID: <code>${chatId ?? "-"}</code>`,
+    ];
+    if (ctx.chat?.type !== "private") {
+      lines.push(`🧵 Topic / Thread ID: <code>${topicId ?? 1}</code>`);
+      lines.push(
+        `🔒 Kunci Topic Grup: ${
+          lockedTopic !== undefined
+            ? `<b>Aktif</b> (Hanya Topic <code>#${lockedTopic}</code>)`
+            : `<i>Semua Topic Diizinkan</i>`
+        }`
+      );
+    }
+    await sendFormatted(ctx, lines.join("\n"), "html");
+  });
+
+  bot.command("topic", async (ctx) => {
+    if (ctx.chat.type === "private") {
+      await sendFormatted(
+        ctx,
+        "ℹ️ Perintah <code>/topic</code> hanya digunakan di dalam Grup Telegram (Forum / Topics).",
+        "html"
+      );
+      return;
+    }
+
+    const chatId = ctx.chat.id;
+    const currentTopic = getMessageTopicId(ctx) ?? 1;
+    const rawArg = (ctx.match ?? "").trim().toLowerCase();
+
+    if (rawArg === "status") {
+      const lockedTopic = getEffectiveAllowedTopic(chatId);
+      const menuHidden = hubStore.isGroupMenuHidden(chatId);
+      await sendFormatted(
+        ctx,
+        `🧵 <b>Status Konfigurasi Topic Grup</b>\n` +
+          `• Chat ID: <code>${chatId}</code>\n` +
+          `• Topic Saat Ini: <code>#${currentTopic}</code>\n` +
+          `• Topic yang Diizinkan: ${
+            lockedTopic !== undefined
+              ? `<b>Hanya Topic <code>#${lockedTopic}</code></b>`
+              : `<b>Semua Topic</b> (belum dikunci)`
+          }\n` +
+          `• Popup Menu <code>/</code> di Grup: <b>${menuHidden ? "Disembunyikan" : "Aktif"}</b>\n\n` +
+          `<b>Perintah:</b>\n` +
+          `• <code>/topic</code> atau <code>/topic here</code> — Kunci bot hanya di topic ini\n` +
+          `• <code>/topic &lt;id_topic&gt;</code> — Kunci bot ke ID topic tertentu\n` +
+          `• <code>/topic off</code> — Izinkan kembali di semua topic grup\n` +
+          `• <code>/topic menu off</code> — Sembunyikan popup daftar <code>/</code> di grup\n` +
+          `• <code>/topic menu on</code> — Tampilkan kembali popup daftar <code>/</code> di grup`,
+        "html"
+      );
+      return;
+    }
+
+    if (rawArg === "off" || rawArg === "unlock" || rawArg === "all" || rawArg === "reset") {
+      hubStore.setAllowedTopic(chatId, 0);
+      await sendFormatted(
+        ctx,
+        `🔓 <b>Kunci Topic Dibuka</b>\nBot sekarang kembali merespons perintah <code>/</code> dan mention di seluruh topic grup ini.`,
+        "html"
+      );
+      return;
+    }
+
+    if (rawArg === "menu off" || rawArg === "hide" || rawArg === "nomenu") {
+      hubStore.setGroupMenuHidden(chatId, true);
+      await ctx.api
+        .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "all_private_chats" } })
+        .catch(() => undefined);
+      await ctx.api.deleteMyCommands({ scope: { type: "default" } }).catch(() => undefined);
+      await ctx.api.deleteMyCommands({ scope: { type: "all_group_chats" } }).catch(() => undefined);
+      await ctx.api
+        .setMyCommands([], { scope: { type: "chat", chat_id: chatId } })
+        .catch(() => undefined);
+      await ctx.api
+        .setMyCommands([], { scope: { type: "chat_administrators", chat_id: chatId } })
+        .catch(() => undefined);
+
+      await sendFormatted(
+        ctx,
+        `🙈 <b>Popup Menu <code>/</code> Grup Disembunyikan</b>\n` +
+          `Daftar autocomplete <code>/</code> milik bot ini telah dihapus dari grup agar tidak memenuhi topic lain (menu <code>/</code> di chat pribadi/DM tetap aktif).\n` +
+          `Anda tetap bisa mengetik perintah seperti <code>/status</code>, <code>/hub</code>, <code>/nodes</code> secara langsung di topic yang diizinkan.\n\n` +
+          `<i>Gunakan <code>/topic menu on</code> jika ingin memunculkan kembali popup <code>/</code> di grup.</i>`,
+        "html"
+      );
+      return;
+    }
+
+    if (rawArg === "menu on" || rawArg === "show" || rawArg === "menu") {
+      hubStore.setGroupMenuHidden(chatId, false);
+      await ctx.api
+        .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "chat", chat_id: chatId } })
+        .catch(() => undefined);
+      await ctx.api
+        .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "chat_administrators", chat_id: chatId } })
+        .catch(() => undefined);
+
+      await sendFormatted(
+        ctx,
+        `📋 <b>Popup Menu <code>/</code> Grup Diaktifkan</b>\nDaftar autocomplete command <code>/</code> untuk bot ini kembali ditampilkan di grup.`,
+        "html"
+      );
+      return;
+    }
+
+    let targetTopic = currentTopic;
+    if (rawArg && rawArg !== "here" && rawArg !== "lock") {
+      const parsedTopic = Number(rawArg);
+      if (!Number.isFinite(parsedTopic) || parsedTopic <= 0) {
+        await sendFormatted(
+          ctx,
+          `⚠️ Format: <code>/topic [here | &lt;id_topic&gt; | off | status | menu off | menu on]</code>`,
+          "html"
+        );
+        return;
+      }
+      targetTopic = Math.trunc(parsedTopic);
+    }
+
+    hubStore.setAllowedTopic(chatId, targetTopic);
     await sendFormatted(
       ctx,
-      `👤 User ID: <code>${ctx.from?.id ?? "-"}</code>\n💬 Chat ID: <code>${ctx.chat?.id ?? "-"}</code>`,
+      `🔒 <b>Bot Dikunci ke Topic <code>#${targetTopic}</code></b>\n` +
+        `• Bot sekarang <b>hanya merespons</b> command <code>/</code> dan pesan di topic ini.\n` +
+        `• Semua command dan pesan di topic/thread lain dalam grup ini akan diabaikan sepenuhnya.\n\n` +
+        `💡 <b>Tips:</b>\n` +
+        `• Ketik <code>/topic off</code> jika ingin membuka kembali ke semua topic.\n` +
+        `• Karena API Telegram mengatur popup autocomplete <code>/</code> di level grup (bukan per-topic), ketik <code>/topic menu off</code> jika Anda juga ingin menyembunyikan daftar popup <code>/</code> bot ini dari grup.`,
       "html"
     );
   });

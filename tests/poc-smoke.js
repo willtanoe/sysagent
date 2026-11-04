@@ -2,7 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const { HubServer, parseNodeTokens } = require("../dist/hub/server.js");
-const { formatFleetSummaryReport, formatBroadcastReport } = require("../dist/hub/bot.js");
+const { formatFleetSummaryReport, formatBroadcastReport, parseAllowedTopics } = require("../dist/hub/bot.js");
 const { HubStore } = require("../dist/hub/store.js");
 const { NodeClient } = require("../dist/node/client.js");
 const { NodeExecutor, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
@@ -646,6 +646,26 @@ async function runTests() {
   assert.ok(ctlExecOut.includes("via-fleet-ctl-ok"), "fleet-ctl.js harus berhasil mengeksekusi perintah ke node target");
   console.log("✓ 25. Embedded OpenCode Hub, Fleet Context, & Cross-Node Loopback Controller (fleet-ctl) lulus");
 
+  // 26. Forum Topic Locking (/topic & ALLOWED_TOPIC_ID) dan Group Command Menu State
+  const parsedTopicCfg = parseAllowedTopics("-100999888777:42, 108");
+  assert.strictEqual(parsedTopicCfg.byChat["-100999888777"], 42);
+  assert.strictEqual(parsedTopicCfg.defaultTopic, 108);
+
+  const topicStore = new HubStore(statePath);
+  topicStore.setAllowedTopic(-100999888777, 77);
+  topicStore.setGroupMenuHidden(-100999888777, true);
+  topicStore.flush();
+
+  const reloadedTopicStore = new HubStore(statePath);
+  assert.strictEqual(reloadedTopicStore.getAllowedTopic(-100999888777), 77);
+  assert.strictEqual(reloadedTopicStore.isGroupMenuHidden(-100999888777), true);
+  assert.strictEqual(reloadedTopicStore.hasAnyHiddenGroupMenu(), true);
+  reloadedTopicStore.setAllowedTopic(-100999888777, 0);
+  reloadedTopicStore.setGroupMenuHidden(-100999888777, false);
+  assert.strictEqual(reloadedTopicStore.getAllowedTopic(-100999888777), 0);
+  assert.strictEqual(reloadedTopicStore.hasAnyHiddenGroupMenu(), false);
+  console.log("✓ 26. Forum Topic Locking (/topic & ALLOWED_TOPIC_ID) dan Group Menu State lulus");
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -655,7 +675,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 25 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
+  console.log("SEMUA 26 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

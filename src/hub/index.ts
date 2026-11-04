@@ -3,7 +3,7 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { run } from "@grammyjs/runner";
 import { HubServer, parseNodeTokens } from "./server";
-import { createHubBot, HUB_BOT_COMMANDS } from "./bot";
+import { createHubBot, HUB_BOT_COMMANDS, parseAllowedTopics } from "./bot";
 import { HubStore } from "./store";
 import { AutoUpdateMonitor } from "../shared/updater";
 import { escapeHtml } from "../shared/format";
@@ -41,6 +41,8 @@ const botToken = process.env.TELEGRAM_BOT_TOKEN;
 const botName = process.env.BOT_NAME;
 const allowedUsers = listIds(process.env.ALLOWED_USER_ID).filter((n) => n > 0);
 const allowedChats = listIds(process.env.ALLOWED_CHAT_ID);
+const parsedTopics = parseAllowedTopics(process.env.ALLOWED_TOPIC_ID);
+const botGroupCommands = process.env.BOT_GROUP_COMMANDS !== "false";
 const stateFile = process.env.HUB_STATE_FILE || "./hub-state.json";
 const embedHubNode = process.env.HUB_EMBED_NODE !== "false";
 const hubNodeId = process.env.HUB_NODE_ID || "hub";
@@ -171,6 +173,8 @@ async function main() {
         botName,
         allowedUsers,
         allowedChats,
+        allowedTopics: parsedTopics.byChat,
+        defaultAllowedTopic: parsedTopics.defaultTopic,
         defaultModel: process.env.MODEL_NAME || process.env.OPENAI_MODEL,
         notifyNodeEvents: process.env.NOTIFY_NODE_EVENTS !== "false",
         hubNodeId,
@@ -179,9 +183,20 @@ async function main() {
       store
     );
 
-    await bot.api.setMyCommands(HUB_BOT_COMMANDS).catch((err) => {
-      console.warn("[boot] Gagal mendaftarkan daftar command Telegram:", err.message);
-    });
+    await bot.api
+      .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "all_private_chats" } })
+      .catch((err) => {
+        console.warn("[boot] Gagal mendaftarkan daftar command Telegram (private):", err.message);
+      });
+
+    if (!botGroupCommands || store.hasAnyHiddenGroupMenu()) {
+      await bot.api.deleteMyCommands({ scope: { type: "default" } }).catch(() => undefined);
+      await bot.api.deleteMyCommands({ scope: { type: "all_group_chats" } }).catch(() => undefined);
+    } else {
+      await bot.api.setMyCommands(HUB_BOT_COMMANDS).catch((err) => {
+        console.warn("[boot] Gagal mendaftarkan daftar command Telegram:", err.message);
+      });
+    }
     await bot.api.deleteWebhook({ drop_pending_updates: true }).catch(() => undefined);
 
     const runner = run(bot);
