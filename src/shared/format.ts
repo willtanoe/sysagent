@@ -12,7 +12,7 @@ export function preBlock(code: string, lang = "text"): string {
   return `<pre><code class="language-${lang}">${escapeHtml(code)}</code></pre>`;
 }
 
-/** Markdown ringan -> HTML Telegram. Escape dulu, baru tag. */
+/** 轻量级 Markdown -> Telegram HTML。先转义，再加标签。 */
 export function markdownToHtml(input: string): string {
   const blocks: string[] = [];
   let text = input.replace(/\r\n/g, "\n");
@@ -38,7 +38,7 @@ export function markdownToHtml(input: string): string {
   return text.replace(/\u0000CB(\d+)\u0000/g, (_match, index: string) => blocks[Number(index)] ?? "");
 }
 
-/** Potong HTML jadi beberapa pesan tanpa merusak blok <pre> dan tanpa membuang isi. */
+/** 将 HTML 分割为多条消息，不破坏 <pre> 块且不丢失内容。 */
 export function chunkHtml(html: string, limit = CHUNK_LIMIT): string[] {
   const chunks: string[] = [];
   let buffer = "";

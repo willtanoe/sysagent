@@ -11,22 +11,22 @@ interface Rule {
   reason: string;
 }
 
-/** Deteksi apakah perintah melakukan redirection ke/dari file (bukan /dev/null atau 2>&1). */
+/** 检测命令是否对文件进行重定向（不包括 /dev/null 或 2>&1）。 */
 export function hasFileRedirection(command: string): boolean {
-  // Hapus string terquote supaya string dalam quote (mis. awk '$1 > 2') tidak memicu redirect
+  // 移除引号内的字符串，避免引号内字符串（如 awk '$1 > 2'）触发重定向
   const unquoted = command.replace(/'[^']*'|"[^"]*"/g, " ");
-  // Buang redirect aman: >/dev/null, 2>/dev/null, &>/dev/null, 2>&1, 1>&2, >&2, dll.
+  // 剔除安全重定向：>/dev/null、2>/dev/null、&>/dev/null、2>&1、1>&2、>&2 等
   const cleaned = unquoted
     .replace(/(?:&>|[0-9]+>|>>|>)\s*\/dev\/null\b/g, " ")
     .replace(/[0-9]*>&[0-9]+/g, " ")
     .replace(/[0-9]*<&[0-9]+/g, " ");
-  // Apakah masih ada redirect operator > atau < (bukan process substitution <(...) atau heredoc <<)?
+  // 是否仍存在重定向操作符 > 或 <（不包括进程替换 <(...) 或 heredoc <<）？
   return /(?:^|[^<])<{1,2}(?![<(])|>{1,2}/.test(cleaned);
 }
 
-/** Target file rahasia yang tidak boleh dibaca atau disentuh. */
+/** 不允许读取或触碰的敏感目标文件。 */
 export function isSecretAccess(raw: string): boolean {
-  // Hapus tanda kutip, backslash, dan kurung kurawal untuk mencegah obfuscation (mis. .e""nv, .e\nv, /etc/{shadow})
+  // 移除引号、反斜杠和花括号，防止混淆（如 .e""nv、.e\nv、/etc/{shadow}）
   const cmd = raw.replace(/["'\\{}]/g, "");
 
   const SECRET =
@@ -35,7 +35,7 @@ export function isSecretAccess(raw: string): boolean {
   return SECRET.test(cmd);
 }
 
-/** Selalu ditolak, tanpa opsi konfirmasi. */
+/** 始终拒绝，不提供确认选项。 */
 const BLOCKED: Rule[] = [
   { pattern: /:\s*\(\s*\)\s*\{[^}]*:\s*\|\s*:\s*&/, reason: "fork bomb" },
   { pattern: /\brm\s+(-[A-Za-z]+\s+)*-[A-Za-z]*r[A-Za-z]*f[A-Za-z]*\s+\/(\s|$|\*)/, reason: "rm -rf /" },
@@ -45,24 +45,24 @@ const BLOCKED: Rule[] = [
   { pattern: /\b(cat|dd|head)\b[^\n]*\/dev\/(urandom|zero|random)[^\n]*>\s*\/dev\/(sd|nvme|vd|hd)/, reason: "mengacak block device" },
   { check: isSecretAccess, reason: "mengakses file rahasia (kredensial)" },
   { pattern: /\bhistory\s+-c\b|\bunset\s+HISTFILE\b|\brm\b[^\n]*\.bash_history/, reason: "menghapus jejak perintah" },
-  // Env leak standalone (bisa berisi token/secret).
+  // 独立的环境变量泄露（可能包含 token/secret）。
   { pattern: /\b(printenv|compgen)\b/, reason: "menampilkan environment (bisa berisi secret)" },
   { pattern: /\b(env|set|declare)\s*($|[;&|])/, reason: "menampilkan environment (bisa berisi secret)" },
   { pattern: /\bexport\s*($|[;&|])/, reason: "menampilkan environment (bisa berisi secret)" },
-  // Eksekusi script/file rahasia agent (askpass).
+  // 执行 agent 的秘密脚本/文件（askpass）。
   { pattern: /\b(bash|sh|zsh|dash|ksh)\b[^\n]*\.config\/aster/, reason: "mengeksekusi file rahasia agent" },
   { pattern: /\b(bash|sh|zsh|dash|ksh)\b[^\n]*askpass/, reason: "mengeksekusi askpass (password sudo)" },
   { pattern: /\.\s+[^\n]*\.config\/aster/, reason: "mengeksekusi file rahasia agent" },
   { pattern: /\.\s+[^\n]*askpass/, reason: "mengeksekusi askpass (password sudo)" },
   { pattern: /\bsource\b[^\n]*askpass/, reason: "mengeksekusi askpass (password sudo)" },
-  // Menyuntikkan password secara plaintext via stdin/pipe.
+  // 通过 stdin/pipe 以明文注入密码。
   { pattern: /\bsudo\s+-[A-Za-z0-9]*S\b/, reason: "menyuntikkan password ke sudo via stdin (-S)" },
   { pattern: /\b(?:printf|echo)\b[^\n]*\|\s*(?:sudo|su)\b/, reason: "pipe password ke sudo/su" },
-  // Hapus pada root filesystem (varian flag).
+  // 在根文件系统上删除（flag 变体）。
   { pattern: /\brm\b[^\n]*\s\/(\s|$|\*|\/)/, reason: "rm pada root filesystem" },
 ];
 
-/** Butuh konfirmasi user lewat inline keyboard. */
+/** 需要用户通过内联键盘确认。 */
 const NEEDS_APPROVAL: Rule[] = [
   {
     check: (cmd) =>
@@ -109,7 +109,7 @@ const NEEDS_APPROVAL: Rule[] = [
     pattern: /\b(bash|sh|zsh|python3?|node|perl|ruby)\s+\/(tmp|var\/tmp|dev\/shm)\//,
     reason: "mengeksekusi script dari direktori sementara",
   },
-  // Menulis/menaruh file ke direktori sistem tanpa lewat redirect.
+  // 不经重定向直接写入/放置文件到系统目录。
   {
     pattern: /\b(cp|install|ln|rsync|mv)\b[^\n]+\s\/(etc|boot|usr|bin|sbin|lib|var\/lib)(\/|\b)/,
     reason: "menaruh file ke direktori sistem",
@@ -118,7 +118,7 @@ const NEEDS_APPROVAL: Rule[] = [
     pattern: /\b(curl|wget)\b[^\n]*\s(-o|-O|--output|-P|--directory-prefix)\s*\/?(etc|boot|usr|bin|sbin|lib)\//,
     reason: "mengunduh file langsung ke direktori sistem",
   },
-  // Eksekusi kode arbitrer dari package manager / interpreter.
+  // 通过包管理器/解释器执行任意代码。
   {
     pattern: /\b(npm|pnpm|yarn|pip|pip3|gem|cargo|go)\s+(i|install|add|get)\b/,
     reason: "memasang paket (eksekusi kode pihak ketiga)",
@@ -130,7 +130,7 @@ const NEEDS_APPROVAL: Rule[] = [
   { pattern: /\b(scp|rsync|sftp)\b/, reason: "transfer file ke/dari host lain" },
   { pattern: /\b(at|batch)\s/, reason: "menjadwalkan job" },
   { pattern: /\b(python3?|perl|node|ruby|php|lua)\b[^\n]*\s(-c|-e|--eval|-r)\b/, reason: "eksekusi kode via interpreter" },
-  // Penulisan/mutasi file (tidak hanya direktori sistem).
+  // 文件写入/修改（不仅限于系统目录）。
   { pattern: /\bcp\b/, reason: "menyalin file" },
   { pattern: /\binstall\b/, reason: "menaruh file (install)" },
   { pattern: /\bln\b/, reason: "membuat link (ubah filesystem)" },
@@ -140,7 +140,7 @@ const NEEDS_APPROVAL: Rule[] = [
   { pattern: /\bperl\b[^\n]*\s-i\b/, reason: "edit in-place (perl -i)" },
   { pattern: /\bawk\b[^\n]*\b(?:print|printf)\b[^;\n}]*(?:>>?|\|)/i, reason: "redirection/pipe output dari dalam awk" },
   { pattern: /\bsed\b[^\n]*(?:\/[gIim]*e\b|(?:^|['";\s])w\s+\S)/i, reason: "eksekusi atau tulis file dari dalam sed" },
-  // Menjalankan script/file lokal via interpreter/shell (hanya saat interpreter ada di posisi executable).
+  // 通过解释器/shell 执行本地脚本/文件（仅当解释器位于可执行位置时）。
   {
     pattern: /(?:^|[;&|()]\s*|\b(?:sudo|doas|exec|nohup|time|env)\s+)\s*(?:python3?|node|perl|ruby|php|lua|bash|sh|zsh|dash|ksh)\s+[^\s-]/i,
     reason: "mengeksekusi script/file lokal via interpreter",
@@ -154,7 +154,7 @@ const NEEDS_APPROVAL: Rule[] = [
     reason: "mengeksekusi script via dot (.)",
   },
   { pattern: /\bsystem\s*\(|\bexec\s*\(|\bpopen\s*\(/, reason: "eksekusi kode dinamis" },
-  // Network egress & download
+  // 网络出站与下载
   {
     pattern: /\bcurl\b[^\n]*\s(-[dFT]|--data\b|--data-\w+|--form\b|--upload-file\b|-X\s*(POST|PUT|PATCH|DELETE)\b)/i,
     reason: "mengirim/mengunggah data ke jaringan (curl)",
@@ -166,7 +166,7 @@ const NEEDS_APPROVAL: Rule[] = [
   { pattern: /\bwget\b/i, reason: "mengunduh file dari jaringan (wget)" },
 ];
 
-/** Pecah pipeline menjadi tahapan terpisah tanpa memecah pipe di dalam kutip. */
+/** 将管道拆分为独立阶段，不拆分引号内的管道。 */
 function splitPipeline(seg: string): string[] {
   const stages: string[] = [];
   let current = "";
@@ -193,29 +193,29 @@ function splitPipeline(seg: string): string[] {
   return stages;
 }
 
-/** Heuristik: apakah perintah ini hanya membaca (tidak mengubah state)? */
+/** 启发式：该命令是否仅读取（不改变状态）？ */
 export function isReadOnlyCommand(command: string): boolean {
   const segments = command.split(/[\n;]+|&&|\|\|/).map((s) => s.trim()).filter(Boolean);
   if (segments.length === 0) return false;
 
   const hasMutating = (seg: string): boolean => {
-    // Redirection ke file asli (bukan /dev/null atau 2>&1)
+    // 重定向到真实文件（非 /dev/null 或 2>&1）
     if (hasFileRedirection(seg)) return true;
-    // In-place edits & script-internal file writes/exec
+    // 原地编辑与脚本内部文件写入/执行
     if (/\b(?:sed|perl)\b[^\n]*\s-i\b/i.test(seg)) return true;
     if (/\bawk\b[^\n]*\b(?:print|printf)\b[^;\n}]*(?:>>?|\|)/i.test(seg)) return true;
     if (/\bsed\b[^\n]*(?:\/[gIim]*e\b|(?:^|['";\s])w\s+\S)/i.test(seg)) return true;
-    // Dynamic exec in scripts
+    // 脚本中的动态执行
     if (/\b(?:system|exec|popen|eval)\s*\(/i.test(seg)) return true;
-    // Command substitution
+    // 命令替换
     if (/`|\$\(/.test(seg)) return true;
-    // Network uploads / downloads
+    // 网络上传/下载
     if (/\bwget\b/i.test(seg)) return true;
     if (/\bcurl\b[^\n]*\s(-[dFToOJ]|--data|--form|--upload|--output)/i.test(seg)) return true;
 
-    // Hapus string terquote supaya teks di dalam echo/grep tidak memicu false positive.
+    // 移除引号字符串，避免 echo/grep 内文本触发误报。
     const low = seg.toLowerCase().replace(/'[^']*'|"[^"]*"/g, " ");
-    // Mutating command tokens (sebagai command, bukan substring teks seperti /etc/passwd).
+    // 变更类命令 token（作为命令，而非 /etc/passwd 这类文本子串）。
     if (/(?<![\/.-])\b(rm|rmdir|mv|cp|install|remove|purge|update|restart|stop|start|enable|disable|kill|pkill|killall|shutdown|poweroff|halt|mkfs|dd|chmod|chown|chattr|truncate|shred|useradd|userdel|usermod|passwd)\b/.test(low)) {
       return true;
     }
@@ -225,14 +225,14 @@ export function isReadOnlyCommand(command: string): boolean {
     if (/\b(apt|apt-get|dnf|yum|pacman|apk|zypper)\s+(install|remove|purge|autoremove|add|del)\b/.test(low)) {
       return true;
     }
-    // apt upgrade/dist-upgrade kecuali dry-run
+    // apt upgrade/dist-upgrade（dry-run 除外）
     if (/\b(apt|apt-get)\s+(\S+\s+)*(upgrade|dist-upgrade|full-upgrade)\b/.test(low)) {
       if (!/\s(-s|--simulate|--dry-run)\b/.test(low)) return true;
     }
     if (/>\s*\/(etc|boot|usr|bin|sbin|lib|var\/lib)\//.test(low)) {
       return true;
     }
-    // reboot sebagai command mutasi (hanya di awal segment)
+    // reboot 作为变更命令（仅在段首）
     if (/^\s*(sudo\s+|doas\s+)*reboot(\s|$)/.test(low)) {
       return true;
     }
@@ -242,14 +242,14 @@ export function isReadOnlyCommand(command: string): boolean {
   const isPipelineStageReadOnly = (stage: string): boolean => {
     const trimmed = stage.trim();
     if (trimmed === "") return false;
-    // Ambil token perintah pertama (abaikan sudo, doas, env, time, nohup)
+    // 获取第一条命令 token（忽略 sudo、doas、env、time、nohup）
     const normalized = trimmed.replace(/^\s*(?:sudo|doas|nohup|time|env)\s+/, "");
-    // Token pertama adalah nama executable / command
+    // 第一个 token 是可执行文件/命令名称
     const firstWordMatch = /^[A-Za-z0-9_.-]+/.exec(normalized);
     if (!firstWordMatch) return false;
     const cmd = firstWordMatch[0].toLowerCase();
 
-    // Command read-only yang jelas
+    // 明显的只读命令
     const basicReadOnly = new Set([
       "uname", "hostname", "uptime", "nproc", "whoami", "id", "arch", "pwd", "date", "sleep",
       "df", "free", "ps", "ss", "netstat", "top", "htop", "vmstat", "iostat", "ip", "ifconfig", "route", "arp",
@@ -262,7 +262,7 @@ export function isReadOnlyCommand(command: string): boolean {
 
     if (basicReadOnly.has(cmd)) return true;
 
-    // Subcommand khusus
+    // 特殊子命令
     if (cmd === "systemctl") {
       return /\bsystemctl\s+(status|list-units|list-unit-files|is-active|is-enabled|is-failed|show|cat|--failed|--type)\b/i.test(normalized);
     }
@@ -286,11 +286,11 @@ export function isReadOnlyCommand(command: string): boolean {
       return /\b(?:dnf|yum)\s+(list|info)\b/i.test(normalized);
     }
     if (cmd === "find") {
-      // find read-only kecuali memakai -delete atau -exec
+      // find 只读（除非使用 -delete 或 -exec）
       return !/\b-(?:delete|exec|execdir)\b/i.test(normalized);
     }
     if (cmd === "curl") {
-      // Hanya curl inspect / head yang read-only
+      // 仅 curl inspect/head 为只读
       return /\bcurl\b[^\n]*\s(-I|--head|-sI|-Is)\b/i.test(normalized);
     }
     if (cmd === "[" || cmd === "test") return true;
@@ -331,5 +331,5 @@ export function assess(command: string): Verdict {
   return { level: "allow", reason: "" };
 }
 
-/** Alias untuk kompatibilitas dengan kode PoC. */
+/** 用于 PoC 代码兼容性的别名。 */
 export const assessRisk = assess;
