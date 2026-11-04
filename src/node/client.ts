@@ -6,6 +6,7 @@ import {
   NodeToHubMsg,
   HubToNodeMsg,
   TokenUsage,
+  AuditEntry,
 } from "../shared/protocol";
 import { NodeEngine, ABORTED } from "./engine";
 import { distro } from "./distro";
@@ -103,6 +104,13 @@ export class NodeClient {
       severity,
       html,
     });
+    return true;
+  }
+
+  /** Forward salinan entri audit ke arsip off-node di Hub. */
+  sendAudit(entry: AuditEntry): boolean {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
+    this.send({ type: "node_audit", entry });
     return true;
   }
 

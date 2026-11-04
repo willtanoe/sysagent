@@ -69,6 +69,8 @@ async function main() {
     tlsKeyPath: process.env.TLS_KEY_PATH,
     // Selaras dengan APPROVAL_TIMEOUT_MS node: approval kedaluwarsa tak bisa diputuskan lagi.
     approvalTimeoutMs: intEnv(process.env.APPROVAL_TIMEOUT_MS, 300_000),
+    // Arsip audit off-node per node (verifikasi hash & deteksi gap dilakukan Hub).
+    centralAuditDir: path.join(path.dirname(path.resolve(stateFile)), "audit-central"),
   });
   await hub.start();
 

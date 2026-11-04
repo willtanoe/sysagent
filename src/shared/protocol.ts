@@ -5,6 +5,10 @@ export interface NodeDistroInfo {
   packageManager: string;
 }
 
+import { AuditEntry } from "./audit";
+
+export type { AuditEntry };
+
 export interface NodeInfo {
   hostname: string;
   platform: string;
@@ -81,13 +85,20 @@ export interface NodeAlertMsg {
   html: string;
 }
 
+/** Salinan entri audit node untuk arsip off-node di Hub (verifikasi hash dilakukan di Hub). */
+export interface NodeAuditMsg {
+  type: "node_audit";
+  entry: AuditEntry;
+}
+
 export type NodeToHubMsg =
   | NodeHelloMsg
   | NodeHeartbeatMsg
   | NodeRunChunkMsg
   | NodeApprovalReqMsg
   | NodeRunDoneMsg
-  | NodeAlertMsg;
+  | NodeAlertMsg
+  | NodeAuditMsg;
 
 // Hub -> Node
 export interface HubWelcomeMsg {

@@ -46,7 +46,7 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
    - `allow`: Hanya perintah inspeksi *read-only* yang terdaftar di *allowlist* `isReadOnlyCommand` (atau pembacaan file non-rahasia di OpenCode) yang langsung dieksekusi tanpa mengganggu operator.
    - `approve`: Perintah mutasi (`sudo`, `systemctl restart`, `rm`, `mkdir`, `touch`, `chmod`, `apt`/`dnf`, `tar`, `find -exec`, modifikasi firewall, redirection file, `edit`/`write` file di OpenCode, maupun *binary* kustom di luar daftar *read-only*) wajib disetujui operator via tombol inline Telegram yang terikat ke `chatId` peminta.
    - `block`: Perintah destruktif (`rm -rf /`, `mkfs`, fork bomb) dan pembacaan file rahasia (`.env`, `/etc/shadow`, `.ssh/*`, `hub-state.json`, `askpass`, bocoran `printenv`, termasuk *obfuscation* backslash/kurung kurawal maupun tool `read` OpenCode) langsung ditolak di level node tanpa opsi *override*, serta `subagent`/`question` di OpenCode dinonaktifkan (`deny`).
-5. **Tamper-Evident Audit Trail**: Setiap eksekusi di node dicatat ke file JSONL lokal (`0600`) dengan redaksi *secret* otomatis dan rantai hash SHA-256 yang dapat diverifikasi kapan saja lewat `/auditcheck`.
+5. **Tamper-Evident Audit Trail**: Setiap eksekusi di node dicatat ke file JSONL lokal (`0600`) dengan redaksi *secret* otomatis dan rantai hash SHA-256 yang dapat diverifikasi kapan saja lewat `/auditcheck`. Setiap entri juga di-*forward* ke Hub untuk diarsipkan *off-node* di `<state>/audit-central/` — hash diverifikasi ulang per entri, dan gap rantai (file audit dihapus/di-reset di node) memicu alert real-time ke Telegram admin.
 6. **Alert Kesehatan Proaktif**: Setiap node memantau penggunaan Disk, Memory, dan unit `systemd` yang gagal, lalu meneruskan notifikasi *alert* dan pemulihan (*recovery*) secara *real-time* ke Telegram admin melalui Hub.
 7. **Batch Approval Multi-Node**: Permintaan persetujuan untuk perintah identik dari beberapa node digabung menjadi satu pesan dengan tombol `Setujui Semua` / `Tolak Semua`. Keputusan diingat 5 menit (hanya di memori Hub, per chat dan pengguna) agar node yang terlambat tidak memicu pesan berulang. Detail dan batasannya ada di [docs/security.md](docs/security.md).
 8. **Embedded Hub Node**: Secara default Hub juga menjalankan satu node internal (`HUB_EMBED_NODE=true`) sehingga operator bisa berdiskusi dengan agen di Hub, yang dapat mengoordinasikan node lain. Host Hub ikut menjadi target eksekusi di bawah aturan risiko yang sama. Set `HUB_EMBED_NODE=false` bila tidak diperlukan.
@@ -88,7 +88,7 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 ├── deploy/systemd/            # Unit systemd produksi (Full-Root & Isolated)
 ├── docs/                      # Dokumentasi lengkap arsitektur, deploy, keamanan, & operasi
 ├── tests/
-│   └── poc-smoke.js           # 30 skenario pengujian otomatis end-to-end, OpenCode, ECC, fleet, approval, & keamanan
+│   └── poc-smoke.js           # 32 skenario pengujian otomatis end-to-end, OpenCode, ECC, fleet, approval, & keamanan
 ├── .env.example               # Template konfigurasi Hub & Node
 ├── .npmrc                     # Konfigurasi npm (omit=optional) untuk instalasi lintas platform
 └── package.json
@@ -118,7 +118,7 @@ npm run build
 ```bash
 npm test
 ```
-Menjalankan 30 skenario pengujian tanpa ketergantungan jaringan luar:
+Menjalankan 32 skenario pengujian tanpa ketergantungan jaringan luar:
 - **Keamanan & audit**: autentikasi token master & per-node, *approval gate*, pemblokiran perintah destruktif, sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`).
 - **Eksekusi & fleet**: eksekusi multi-node terisolasi, pembatalan proses (`/stop`), *proactive alert*, `/status all`, `/broadcast`, *embedded Hub node* beserta `fleet-ctl`, *auto-reconnect*.
 - **Engine AI**: integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), **ECC (Everything Claude Code)** (`listEccSkills`, `buildEccContextForPrompt`, `provisionOpenCodeEcc`, RPC `__builtin:ecc`), serta injeksi provider Gateway dari `.env`.

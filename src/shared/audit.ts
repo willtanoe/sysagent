@@ -54,12 +54,37 @@ function computeEntryHash(entryWithoutHash: Omit<AuditEntry, "hash">): string {
   return crypto.createHash("sha256").update(payload).digest("hex");
 }
 
+/** Validasi bentuk entri audit yang diterima dari jaringan sebelum dipercaya. */
+export function isValidAuditEntry(value: unknown): value is AuditEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const e = value as Record<string, unknown>;
+  return (
+    typeof e.ts === "string" &&
+    typeof e.nodeId === "string" &&
+    typeof e.command === "string" &&
+    (typeof e.exitCode === "number" || e.exitCode === null) &&
+    typeof e.durationMs === "number" &&
+    typeof e.risk === "string" &&
+    typeof e.approved === "boolean" &&
+    typeof e.prevHash === "string" &&
+    typeof e.hash === "string"
+  );
+}
+
+/** Verifikasi ulang hash SHA-256 sebuah entri (dipakai Hub untuk salinan audit off-node). */
+export function verifyEntryHash(entry: AuditEntry): boolean {
+  const { hash, ...rest } = entry;
+  return computeEntryHash(rest) === hash;
+}
+
 export class AuditLogger {
   private lastHash: string = "GENESIS";
   private logPath: string;
+  private sink?: (entry: AuditEntry) => void;
 
-  constructor(logPath: string) {
+  constructor(logPath: string, sink?: (entry: AuditEntry) => void) {
     this.logPath = logPath;
+    this.sink = sink;
     this.init();
   }
 
@@ -141,10 +166,36 @@ export class AuditLogger {
       } catch {
         // abaikan
       }
+      // Teruskan entri yang sudah berhasil dipersist ke salinan off-node (bila diset).
+      this.sink?.(entry);
     } catch (err: any) {
       console.error(`[audit:${data.nodeId}] Gagal menulis audit log:`, err.message);
     }
     return entry;
+  }
+
+  /** Tambahkan entri eksternal (mis. salinan rantai dari node) apa adanya, tanpa menghitung ulang hash. */
+  appendExternal(entry: AuditEntry): boolean {
+    this.init();
+    try {
+      fs.appendFileSync(this.logPath, JSON.stringify(entry) + "\n", { encoding: "utf8", mode: 0o600 });
+      try {
+        fs.chmodSync(this.logPath, 0o600);
+      } catch {
+        // abaikan
+      }
+      this.lastHash = entry.hash;
+      return true;
+    } catch (err: any) {
+      console.error(`[audit] Gagal menambah entri eksternal:`, err.message);
+      return false;
+    }
+  }
+
+  /** Hash terakhir pada rantai file ini (resync dari disk bila ada penulis lain). */
+  getLastHash(): string {
+    this.init();
+    return this.lastHash;
   }
 
   verify(): AuditVerifyResult {

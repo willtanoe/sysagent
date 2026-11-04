@@ -2,6 +2,7 @@ import WebSocket, { WebSocketServer, RawData } from "ws";
 import * as http from "http";
 import * as https from "https";
 import * as fs from "fs";
+import * as path from "path";
 import * as crypto from "crypto";
 import { EventEmitter } from "events";
 import {
@@ -11,6 +12,8 @@ import {
   ChatHistoryItem,
   TokenUsage,
 } from "../shared/protocol";
+import { AuditLogger, AuditEntry, isValidAuditEntry, verifyEntryHash } from "../shared/audit";
+import { escapeHtml, preBlock } from "../shared/format";
 
 const NODE_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 
@@ -60,6 +63,8 @@ export interface HubServerOptions {
   maxPayloadBytes?: number;
   /** Usia maksimal permintaan approval (harus selaras APPROVAL_TIMEOUT_MS node). Default 300s. */
   approvalTimeoutMs?: number;
+  /** Direktori arsip audit off-node per node. Kosong = forwarding audit dinonaktifkan. */
+  centralAuditDir?: string;
 }
 
 /** Perbandingan token constant-time menggunakan SHA-256 digest agar aman dari timing attack. */
@@ -94,6 +99,10 @@ export class HubServer extends EventEmitter {
   private authTimeoutMs: number;
   private maxPayloadBytes: number;
   private approvalTimeoutMs: number;
+  private centralAuditDir?: string;
+  private centralAudits = new Map<string, AuditLogger>();
+  private centralExpected = new Map<string, string>();
+  private auditAlertCooldowns = new Map<string, number>();
   private approvalCleanupTimer: NodeJS.Timeout | null = null;
   private httpServer: http.Server | null = null;
   private httpsServer: https.Server | null = null;
@@ -117,6 +126,7 @@ export class HubServer extends EventEmitter {
     this.authTimeoutMs = opts?.authTimeoutMs ?? 5_000;
     this.maxPayloadBytes = opts?.maxPayloadBytes ?? 2 * 1024 * 1024;
     this.approvalTimeoutMs = opts?.approvalTimeoutMs ?? 300_000;
+    this.centralAuditDir = opts?.centralAuditDir;
   }
 
   getLoopbackConfig(): { url: string; cookie: string } {
@@ -387,6 +397,11 @@ export class HubServer extends EventEmitter {
                 this.emit("node_alert", authenticatedNodeId, msg.key, msg.severity, msg.html);
                 return;
               }
+
+              if (msg.type === "node_audit") {
+                this.handleCentralAudit(authenticatedNodeId, msg.entry);
+                return;
+              }
             } catch (err: any) {
               console.error("[hub] Gagal memproses pesan socket:", err.message);
             }
@@ -596,6 +611,68 @@ export class HubServer extends EventEmitter {
     const tracked = this.approvals.get(approvalId);
     if (!tracked) return false;
     return this.sendApproval(tracked.nodeId, tracked.runId, approvalId, approved, chatId, userId);
+  }
+
+  /** Alert anomali audit terpusat dengan cooldown per (key, node) agar tidak spam. */
+  private emitAuditAlert(nodeId: string, key: string, detail: string): void {
+    const now = Date.now();
+    const cooldownKey = `${key}:${nodeId}`;
+    if (now - (this.auditAlertCooldowns.get(cooldownKey) ?? 0) < 60_000) return;
+    this.auditAlertCooldowns.set(cooldownKey, now);
+    const html =
+      `🛡️ <b>[${escapeHtml(nodeId)}] Anomali audit terdeteksi</b>\n` +
+      `<i>${escapeHtml(key)}</i>\n` +
+      `${preBlock(detail)}`;
+    this.emit("node_alert", nodeId, key, "warn", html);
+  }
+
+  /**
+   * Arsip audit off-node: verifikasi bentuk + hash tiap entri dari node, lalu simpan apa adanya
+   * (rantai hash milik node dipertahankan) ke file per-node di Hub. Gap rantai = entri hilang
+   * atau file audit node di-reset/regenerasi -> alert real-time.
+   */
+  private handleCentralAudit(nodeId: string, rawEntry: unknown): void {
+    if (!this.centralAuditDir) return;
+    if (!isValidAuditEntry(rawEntry)) {
+      this.emitAuditAlert(nodeId, "audit-invalid", "Entri audit tidak valid (bentuk rusak) — diabaikan.");
+      return;
+    }
+    const entry: AuditEntry = rawEntry;
+    if (entry.nodeId !== nodeId) {
+      this.emitAuditAlert(
+        nodeId,
+        "audit-invalid",
+        `Entri audit mengaku node '${entry.nodeId}' melalui koneksi '${nodeId}' — diabaikan.`
+      );
+      return;
+    }
+    if (!verifyEntryHash(entry)) {
+      this.emitAuditAlert(
+        nodeId,
+        "audit-invalid",
+        `Hash entri audit tidak cocok (data dimanipulasi?): cmd=${entry.command.slice(0, 80)} — diabaikan.`
+      );
+      return;
+    }
+
+    let central = this.centralAudits.get(nodeId);
+    if (!central) {
+      central = new AuditLogger(path.join(this.centralAuditDir, `central-${nodeId}.jsonl`));
+      this.centralAudits.set(nodeId, central);
+    }
+
+    const expected = this.centralExpected.get(nodeId) ?? central.getLastHash();
+    const centralStartEmpty = expected === "GENESIS";
+    if (!centralStartEmpty && entry.prevHash !== expected) {
+      this.emitAuditAlert(
+        nodeId,
+        "audit-gap",
+        `Rantai audit terputus: ekspektasi prevHash ${expected.slice(0, 12)}…, dapat ${entry.prevHash.slice(0, 12)}… (ada entri yang tidak sampai atau file audit node di-reset).`
+      );
+    }
+    if (central.appendExternal(entry)) {
+      this.centralExpected.set(nodeId, entry.hash);
+    }
   }
 
   async broadcastRun(

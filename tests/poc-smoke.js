@@ -1,6 +1,8 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
+const WebSocket = require("ws");
 const { HubServer, parseNodeTokens } = require("../dist/hub/server.js");
 const { formatFleetSummaryReport, formatBroadcastReport, parseAllowedTopics } = require("../dist/hub/bot.js");
 const { HubStore } = require("../dist/hub/store.js");
@@ -19,7 +21,7 @@ const {
 } = require("../dist/node/ecc.js");
 const { createNodeAlertEvaluator } = require("../dist/node/alerts.js");
 const { assessRisk, isReadOnlyCommand } = require("../dist/shared/risk.js");
-const { redactSecrets } = require("../dist/shared/audit.js");
+const { redactSecrets, AuditLogger } = require("../dist/shared/audit.js");
 const { markdownToHtml, chunkHtml } = require("../dist/shared/format.js");
 const { getGitVersionInfo, checkAndApplyUpdate, AutoUpdateMonitor } = require("../dist/shared/updater.js");
 
@@ -879,6 +881,122 @@ async function runTests() {
 
   console.log("✓ 30. Batch Approval Aggregator, Deduplikasi Multi-Node, Pemisahan Tombol Setujui/Tolak, & Auto-Approval Memory lulus");
 
+  // 31. Expiry approval di Hub — approval kedaluwarsa tidak bisa diputuskan lagi
+  {
+    const hubExpiry = new HubServer(9877, "expiry-token-abc", { host: "127.0.0.1", approvalTimeoutMs: 120 });
+    await hubExpiry.start();
+    const wsNode = new WebSocket("ws://127.0.0.1:9877");
+    await new Promise((res) => wsNode.on("open", res));
+    const welcomed = new Promise((res) =>
+      wsNode.on("message", (raw) => {
+        const m = JSON.parse(raw.toString());
+        if (m.type === "hub_welcome") res(m);
+      })
+    );
+    wsNode.send(
+      JSON.stringify({
+        type: "node_hello",
+        nodeId: "expiry-node",
+        token: "expiry-token-abc",
+        info: { hostname: "expiry-host", platform: "linux", arch: "x64", uptime: 1, loadAvg: [0, 0, 0], memory: { totalMb: 1024, freeMb: 512 } },
+      })
+    );
+    await welcomed;
+
+    const runId = hubExpiry.startRun("expiry-node", 4242, "$ touch /tmp/expiry-test", {
+      onChunk: () => {},
+      onApprovalReq: () => {},
+      onDone: () => {},
+    });
+
+    wsNode.send(JSON.stringify({ type: "node_approval_req", runId, approvalId: "appr_fresh_1", command: "touch /tmp/expiry-test", reason: "uji fresh" }));
+    await sleep(30);
+    assert.strictEqual(hubExpiry.resolveApprovalById("appr_fresh_1", true, 4242), true, "Approval segar harus bisa diputuskan");
+
+    wsNode.send(JSON.stringify({ type: "node_approval_req", runId, approvalId: "appr_stale_1", command: "touch /tmp/expiry-test", reason: "uji stale" }));
+    await sleep(220);
+    assert.strictEqual(hubExpiry.resolveApprovalById("appr_stale_1", true, 4242), false, "Approval kedaluwarsa harus ditolak");
+    assert.strictEqual(hubExpiry.resolveApprovalById("appr_tak_ada", true, 4242), false, "ApprovalId tak dikenal tetap false");
+
+    wsNode.close();
+    await hubExpiry.stop();
+    console.log("✓ 31. Expiry approval di Hub (cek usia saat keputusan + GC periodik) lulus");
+  }
+
+  // 32. Arsip audit off-node di Hub — forwarding, verifikasi hash, deteksi gap & entri invalid
+  {
+    const centralDir = path.join("/tmp", `aster-central-test-${Date.now()}`);
+    const auditFwdPath = path.join("/tmp", `audit-fwd-test-${Date.now()}.jsonl`);
+    fs.mkdirSync(centralDir, { recursive: true });
+
+    const hubAudit = new HubServer(9878, "audit-hub-token", { host: "127.0.0.1", centralAuditDir: centralDir });
+    await hubAudit.start();
+
+    const anomalyKeys = [];
+    hubAudit.on("node_alert", (_nodeId, key) => {
+      if (String(key).startsWith("audit-")) anomalyKeys.push(key);
+    });
+
+    let fwdClientRef = null;
+    const execFwd = new NodeExecutor("fwdnode", auditFwdPath, {
+      onAuditEntry: (entry) => {
+        if (fwdClientRef) fwdClientRef.sendAudit(entry);
+      },
+    });
+    const engineFwd = new NodeEngine("fwdnode", execFwd, { engineMode: "local" });
+    const clientFwd = new NodeClient(
+      { hubUrl: "ws://127.0.0.1:9878", nodeId: "fwdnode", token: "audit-hub-token" },
+      engineFwd
+    );
+    fwdClientRef = clientFwd;
+    clientFwd.start();
+    await sleep(400);
+
+    const runDone = new Promise((res) => {
+      hubAudit.startRun("fwdnode", 4343, "$ echo audit-fwd-test", {
+        onChunk: () => {},
+        onApprovalReq: () => {},
+        onDone: (fullText, error) => res({ fullText, error }),
+      });
+    });
+    const runRes = await runDone;
+    assert.ok(!runRes.error, `Eksekusi echo di node forward harus sukses: ${runRes.error}`);
+    await sleep(250);
+
+    const centralFile = path.join(centralDir, "central-fwdnode.jsonl");
+    assert.ok(fs.existsSync(centralFile), "File arsip audit terpusat harus dibuat di Hub");
+    const centralLines = fs
+      .readFileSync(centralFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    assert.ok(centralLines.some((e) => e.command.includes("audit-fwd-test")), "Entri eksekusi echo harus ter-forward ke arsip terpusat");
+    assert.strictEqual(new AuditLogger(centralFile).verify().ok, true, "Rantai hash arsip terpusat harus utuh");
+
+    // Gap: entri valid-secara-hash tetapi prevHash tidak menyambung -> alert audit-gap
+    const lastEntry = centralLines[centralLines.length - 1];
+    const forged = { ...lastEntry, command: "$ systemctl restart nginx", ts: new Date().toISOString(), prevHash: "f".repeat(64) };
+    const payload = [
+      forged.ts, forged.nodeId, forged.command, String(forged.exitCode), String(forged.durationMs),
+      forged.risk, String(forged.approved), String(forged.timedOut ?? false), forged.outputPreview ?? "",
+      String(forged.chatId ?? ""), String(forged.userId ?? ""), forged.prevHash,
+    ].join("|");
+    forged.hash = crypto.createHash("sha256").update(payload).digest("hex");
+    clientFwd.sendAudit(forged);
+    await sleep(250);
+
+    // Invalid: hash tidak cocok dengan isi entri (manipulasi) -> alert audit-invalid
+    clientFwd.sendAudit({ ...forged, command: "$ tampered-after-hash" });
+    await sleep(250);
+
+    assert.ok(anomalyKeys.includes("audit-gap"), "Gap rantai audit harus memicu alert audit-gap");
+    assert.ok(anomalyKeys.includes("audit-invalid"), "Hash yang dimanipulasi harus memicu alert audit-invalid");
+
+    clientFwd.stop();
+    await hubAudit.stop();
+    console.log("✓ 32. Arsip audit off-node di Hub (forwarding, verifikasi hash, deteksi gap & invalid) lulus");
+  }
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -888,7 +1006,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 30 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
+  console.log("SEMUA 32 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

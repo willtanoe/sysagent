@@ -15,7 +15,7 @@ Aster Fleet Manager dirancang dengan prinsip **Defense-in-Depth** untuk lingkung
 3. **Otorisasi Operator Berlapis & Isolasi Approval di Telegram**:
    - Hanya pengguna dengan Telegram User ID yang terdaftar di `ALLOWED_USER_ID` yang dapat berinteraksi dengan bot atau menekan tombol *approval*.
    - `ALLOWED_CHAT_ID` memungkinkan penguncian operasional bot hanya pada ruang obrolan tertentu (misalnya DM pribadi atau grup *engineering* internal).
-   - Setiap permintaan *approval* dipetakan di memori `HubServer` terhadap `(nodeId, runId, chatId)` dengan format `callback_data` ringkas (`ap:<approvalId>:yes|no`, selalu di bawah batas 64-byte API Telegram) dan divalidasi agar *chat* lain tidak dapat menyetujui *approval* milik *chat* berbeda.
+   - Setiap permintaan *approval* dipetakan di memori `HubServer` terhadap `(nodeId, runId, chatId)` dan hanya dapat diputuskan melalui tombol batch `apb:<batchId>:yes|no` milik `ApprovalBatcher`, divalidasi agar *chat* lain tidak dapat menyetujui *approval* milik *chat* berbeda.
    - Jika koneksi node terputus di tengah eksekusi, seluruh *run* dan *pending approval* untuk node tersebut otomatis dibatalkan dan dibersihkan.
    - Permintaan *approval* untuk perintah identik dari beberapa node digabung oleh `ApprovalBatcher` (`src/hub/approval.ts`). Lihat bagian 3 untuk batasan keamanannya.
 4. **Sanitasi Environment Child Process (`sanitizeEnv`)**:
@@ -64,8 +64,9 @@ Saat beberapa node meminta persetujuan untuk perintah yang sama (misalnya dari `
 
 - **Kunci batch**: `chatId` + `userId` peminta + teks perintah yang dinormalisasi (`trim` dan penyeragaman `\r\n`). Perintah yang berbeda satu karakter pun tidak digabung.
 - **Debounce**: permintaan yang tiba dalam 350 ms bergabung ke pesan yang sama. Daftar node pada pesan diperbarui langsung saat node baru bergabung.
-- **Tombol**: `✅ Setujui` / `❌ Tolak` untuk 1 node, atau `✅ Setujui Semua (N Node)` / `❌ Tolak Semua (N Node)` untuk beberapa node. Format `callback_data` adalah `apb:<batchId>:yes|no`. Format lama `ap:<approvalId>:yes|no` dan `appr:...` tetap didukung.
+- **Tombol**: `✅ Setujui` / `❌ Tolak` untuk 1 node, atau `✅ Setujui Semua (N Node)` / `❌ Tolak Semua (N Node)` untuk beberapa node. Format `callback_data` adalah `apb:<batchId>:yes|no` (satu-satunya format yang didukung; format warisan telah dihapus).
 - **Otorisasi**: hanya `userId` yang menjalankan perintah yang boleh menekan tombol. Pengguna lain mendapat peringatan dan batch tetap menunggu.
+- **Expiry Approval**: permintaan approval memiliki usia maksimal `APPROVAL_TIMEOUT_MS` (default 300 detik, selaras dengan timeout di sisi node). Setelah usia itu terlampaui, keputusan tidak dapat lagi dikirim ke node (`sendApproval` menolak), dan entri yang kedaluwarsa dibersihkan Hub setiap 30 detik. Tombol pada pesan lama otomatis mati secara elegan dengan toast "kedaluwarsa".
 - **Auto-Approval Memory**: setelah operator memutuskan, keputusan itu disimpan di memori Hub selama **5 menit** (`cacheTtlMs`) dengan kunci yang sama dengan kunci batch. Permintaan identik dari node yang terlambat atau berurutan dalam jendela itu langsung diselesaikan dengan keputusan yang sama, tanpa pesan baru.
 
 Hal yang perlu diperhatikan:
@@ -83,6 +84,8 @@ Setiap perintah yang masuk ke `NodeExecutor` dicatat ke file JSONL lokal dengan 
 - **Redaksi Otomatis (`redactSecrets`)**: Pola password, token, argumen `--password`, dan header `Bearer` disensor menjadi `[REDACTED]` sebelum ditulis ke disk.
 - **Hash Chaining SHA-256**: Setiap baris menyimpan `prevHash` (hash baris sebelumnya, dimulai dari `"GENESIS"`) dan `hash` SHA-256 atas seluruh kolom baris tersebut.
 - **Verifikasi Integritas (`/auditcheck`)**: Jika seseorang memodifikasi atau menghapus satu baris pun di dalam file audit, verifikasi rantai hash akan langsung mendeteksi nomor baris yang rusak.
+- **Arsip Audit Off-Node di Hub**: Setiap entri audit yang berhasil ditulis di node otomatis di-*forward* ke Hub melalui pesan WebSocket `node_audit`. Hub memverifikasi bentuk entri, kecocokan `nodeId` dengan koneksi pengirim, dan hash SHA-256 per entri (kalkulasi ulang), lalu menyimpan salinannya apa adanya (rantai hash milik node tetap utuh) ke `<direktori HUB_STATE_FILE>/audit-central/central-<nodeId>.jsonl` (`0600`). Jika file audit node dihapus, di-reset, atau regenerasi dari nol, rantai salinan terpusat akan terputus dan Hub mengirim alert real-time ke Telegram admin (`audit-gap`); entri dengan hash yang dimanipulasi atau `nodeId` yang tidak cocok ditolak dengan alert `audit-invalid` (cooldown 60 detik per jenis). Dengan salinan ini, penghapusan total file audit di node tidak lagi lolos tanpa jejak — karena bukti rantainya tersimpan di host Hub.
+- **Batasan**: arsip terpusat hidup di host Hub; jika node **dan** Hub dikompromikan bersamaan oleh root yang sama, salinan tidak memberikan perlindungan tambahan. Entri yang dihasilkan saat node terputus dari Hub tidak mungkin ada (perintah hanya berasal dari Hub), sehingga setiap gap rantai pada arsip selalu merupakan sinyal anomali, bukan artefak koneksi.
 
 ---
 

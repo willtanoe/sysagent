@@ -33,11 +33,17 @@ if (!hubToken) {
   process.exit(1);
 }
 
+// Referensi client diisi setelah konstruksi; dipakai untuk forward entri audit ke Hub (off-node copy).
+let clientRef: NodeClient | null = null;
+
 const executor = new NodeExecutor(nodeId, auditPath, {
   sudoPassword: process.env.SUDO_PASSWORD,
   shellTimeoutMs: intEnv(process.env.SHELL_TIMEOUT_MS, 120_000),
   packageTimeoutMs: intEnv(process.env.PACKAGE_TIMEOUT_MS, 900_000),
   maxCommandsPerMinute: intEnv(process.env.MAX_COMMANDS_PER_MINUTE, 30),
+  onAuditEntry: (entry) => {
+    clientRef?.sendAudit(entry);
+  },
 });
 
 const engine = new NodeEngine(nodeId, executor, {
@@ -55,7 +61,6 @@ const engine = new NodeEngine(nodeId, executor, {
   statusServices: listEnv(process.env.STATUS_SERVICES),
 });
 
-let clientRef: NodeClient | null = null;
 let managedOpenCode: ManagedOpenCodeServer | null = null;
 let autoUpdater: AutoUpdateMonitor | null = null;
 

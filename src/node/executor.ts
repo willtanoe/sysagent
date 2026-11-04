@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { assessRisk, Verdict } from "../shared/risk";
-import { AuditLogger, AuditVerifyResult } from "../shared/audit";
+import { AuditLogger, AuditVerifyResult, AuditEntry } from "../shared/audit";
 
 const MAX_BUFFER = 8 * 1024 * 1024;
 const MAX_MODEL_OUTPUT = 12_000;
@@ -34,6 +34,8 @@ export interface ExecutorOptions {
   shellTimeoutMs?: number;
   packageTimeoutMs?: number;
   maxCommandsPerMinute?: number;
+  /** Sink opsional: setiap entri audit yang tercatat lokal diteruskan (mis. ke arsip off-node di Hub). */
+  onAuditEntry?: (entry: AuditEntry) => void;
 }
 
 export type RequestApprovalFn = (command: string, reason: string) => Promise<boolean>;
@@ -71,7 +73,7 @@ export class NodeExecutor {
 
   constructor(nodeId: string, auditPath: string, opts?: ExecutorOptions) {
     this.nodeId = nodeId;
-    this.audit = new AuditLogger(auditPath);
+    this.audit = new AuditLogger(auditPath, opts?.onAuditEntry);
     this.shellTimeoutMs = Math.min(opts?.shellTimeoutMs ?? 120_000, 1_800_000);
     this.packageTimeoutMs = Math.min(opts?.packageTimeoutMs ?? 900_000, 1_800_000);
     this.maxCommandsPerMinute = opts?.maxCommandsPerMinute ?? 30;
