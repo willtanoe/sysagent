@@ -5,7 +5,7 @@ export interface OpenCodePermission {
 }
 
 export interface OpenCodeRunDeps {
-  chatId: number;
+  chatId: number | string;
   model?: string;
   systemContext?: string;
   dynamicContext?: string;
@@ -53,7 +53,7 @@ interface EventLike {
 
 export class OpenCodeRunner {
   private config: Required<OpenCodeConfig>;
-  private sessions = new Map<number, string>();
+  private sessions = new Map<number | string, string>();
   private primedSessions = new Set<string>();
 
   constructor(config: OpenCodeConfig) {
@@ -72,15 +72,15 @@ export class OpenCodeRunner {
     this.config.password = password;
   }
 
-  getSession(chatId: number): string | null {
+  getSession(chatId: number | string): string | null {
     return this.sessions.get(chatId) ?? null;
   }
 
-  setSession(chatId: number, sessionId: string): void {
+  setSession(chatId: number | string, sessionId: string): void {
     this.sessions.set(chatId, sessionId);
   }
 
-  clearSession(chatId: number): void {
+  clearSession(chatId: number | string): void {
     const existing = this.sessions.get(chatId);
     if (existing) this.primedSessions.delete(existing);
     this.sessions.delete(chatId);
@@ -119,7 +119,7 @@ export class OpenCodeRunner {
     return { status: response.status, data, raw };
   }
 
-  private async createSession(chatId: number, wantedModel: string): Promise<string> {
+  private async createSession(chatId: number | string, wantedModel: string): Promise<string> {
     const model = splitModel(wantedModel);
     const created = await this.api<{ id?: string }>("POST", "/api/session", {
       title: `telegram-${chatId}`,
@@ -137,7 +137,7 @@ export class OpenCodeRunner {
     return id;
   }
 
-  private async ensureSession(chatId: number, wantedModel: string): Promise<string> {
+  private async ensureSession(chatId: number | string, wantedModel: string): Promise<string> {
     const existing = this.sessions.get(chatId);
 
     if (existing !== undefined) {

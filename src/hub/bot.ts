@@ -463,6 +463,16 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   const hubNodeId = config.hubNodeId || process.env.HUB_NODE_ID || "hub";
   const knownCommands = new Set(HUB_BOT_COMMANDS.map((c) => c.command.toLowerCase()));
 
+  /**
+   * Scope state per pengguna: DM memakai chatId (== userId), grup memakai "chatId:userId"
+   * sehingga tiap user di grup punya node aktif, riwayat, model, dan statistik token sendiri.
+   */
+  function scopeOf(ctx: Context): number | string {
+    const chatId = ctx.chat?.id ?? 0;
+    const userId = ctx.from?.id;
+    return chatId < 0 && userId ? `${chatId}:${userId}` : chatId;
+  }
+
   function getMessageTopicId(ctx: Context): number | undefined {
     const msg = (ctx.message ?? ctx.callbackQuery?.message) as any;
     if (!msg) return undefined;
@@ -748,8 +758,9 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
     try {
       let currentRunId = "";
-      const modelOverride = hubStore.getModelOverride(chatId);
-      const history = opts?.rememberInHistory ? hubStore.getHistory(chatId, nodeId) : undefined;
+      const scope = scopeOf(ctx);
+      const modelOverride = hubStore.getModelOverride(scope);
+      const history = opts?.rememberInHistory ? hubStore.getHistory(scope, nodeId) : undefined;
 
       currentRunId = hub.startRun(
         nodeId,
@@ -778,10 +789,10 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
             const elapsedMs = progress.elapsedMs();
             void setReaction(ctx, error ? (error === "ABORTED" ? null : "👎") : "👍");
             if (usage) {
-              hubStore.addUsage(chatId, usage);
+              hubStore.addUsage(scopeOf(ctx), usage);
             }
             if (opts?.rememberInHistory && !error) {
-              hubStore.remember(chatId, nodeId, prompt, fullText);
+              hubStore.remember(scopeOf(ctx), nodeId, prompt, fullText);
             }
 
             try {
@@ -827,8 +838,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   }
 
   async function requireActiveNode(ctx: Context): Promise<string | null> {
-    const chatId = ctx.chat?.id ?? 0;
-    const current = hubStore.getActiveNode(chatId);
+    const current = hubStore.getActiveNode(scopeOf(ctx));
     if (current) return current;
 
     // Default otomatis ke OpenCode Hub jika node embedded 'hub' sedang aktif
@@ -1119,7 +1129,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       return;
     }
 
-    const current = hubStore.getActiveNode(ctx.chat.id);
+    const current = hubStore.getActiveNode(scopeOf(ctx));
     let text = `🌐 <b>Daftar Server Terhubung (${nodes.length})</b>:\n\n`;
     const keyboard = new InlineKeyboard();
 
@@ -1164,7 +1174,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       return;
     }
 
-    hubStore.setActiveNode(ctx.chat.id, target);
+    hubStore.setActiveNode(scopeOf(ctx), target);
     await sendFormatted(
       ctx,
       `✅ Node aktif disetel ke: <b>${escapeHtml(target)}</b> (<code>${escapeHtml(node.info.hostname)}</code>)`,
@@ -1173,7 +1183,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   });
 
   bot.command("unuse", async (ctx) => {
-    hubStore.setActiveNode(ctx.chat.id, null);
+    hubStore.setActiveNode(scopeOf(ctx), null);
     if (hub.getNode(hubNodeId)) {
       await sendFormatted(
         ctx,
@@ -1199,7 +1209,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
 
     if (!prompt) {
-      hubStore.setActiveNode(ctx.chat.id, hubNodeId);
+      hubStore.setActiveNode(scopeOf(ctx), hubNodeId);
       const otherNodes = hub
         .listNodes()
         .filter((n) => n.nodeId !== hubNodeId)
@@ -1228,7 +1238,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
 
     const chatId = ctx.chat?.id ?? 0;
-    const current = hubStore.getActiveNode(chatId);
+    const current = hubStore.getActiveNode(scopeOf(ctx));
     const waitMsg = await ctx.reply(
       `⏳ <b>Mengumpulkan status live dari ${nodes.length} node secara paralel...</b>`,
       { parse_mode: "HTML" }
@@ -1245,7 +1255,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
   bot.command("status", async (ctx) => {
     const arg = (ctx.match ?? "").trim();
-    const current = hubStore.getActiveNode(ctx.chat.id);
+    const current = hubStore.getActiveNode(scopeOf(ctx));
     const nodes = hub.listNodes();
     const targetNodeId =
       arg && arg !== "all"
@@ -1285,7 +1295,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const chatId = ctx.chat?.id ?? 0;
     const userId = ctx.from?.id ?? 0;
     const isDirectShell = prompt.startsWith("$ ");
-    const modelOverride = hubStore.getModelOverride(chatId);
+    const modelOverride = hubStore.getModelOverride(scopeOf(ctx));
     const startedAt = Date.now();
 
     const renderProgressHtml = (progressList: BroadcastNodeProgress[]): string => {
@@ -1328,7 +1338,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const results = await hub.broadcastRun(chatId, prompt, {
       model: modelOverride,
       userId,
-      getHistory: (nodeId) => (!isDirectShell ? hubStore.getHistory(chatId, nodeId) : undefined),
+      getHistory: (nodeId) => (!isDirectShell ? hubStore.getHistory(scopeOf(ctx), nodeId) : undefined),
       onProgress: (progressList) => {
         if (boardClosed) return;
         const now = Date.now();
@@ -1361,10 +1371,10 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     void setReaction(ctx, results.some((r) => r.status === "ok") ? "👍" : "👎");
     for (const res of results) {
       if (res.usage) {
-        hubStore.addUsage(chatId, res.usage);
+        hubStore.addUsage(scopeOf(ctx), res.usage);
       }
       if (!isDirectShell && res.status === "ok") {
-        hubStore.remember(chatId, res.nodeId, prompt, res.fullText);
+        hubStore.remember(scopeOf(ctx), res.nodeId, prompt, res.fullText);
       }
     }
 
@@ -1488,7 +1498,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   });
 
   bot.command("stop", async (ctx) => {
-    const cancelled = hub.cancelChatRuns(ctx.chat.id);
+    const cancelled = hub.cancelChatRuns(ctx.chat.id, ctx.from?.id);
     if (cancelled === 0) {
       await sendFormatted(ctx, "ℹ️ Tidak ada eksekusi yang sedang berjalan di chat ini.", "html");
     } else {
@@ -1580,9 +1590,9 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
   bot.command("model", async (ctx) => {
     const arg = (ctx.match ?? "").trim();
-    const currentOverride = hubStore.getModelOverride(ctx.chat.id);
+    const currentOverride = hubStore.getModelOverride(scopeOf(ctx));
     const activeModel = currentOverride || defaultModel;
-    const currentNode = hubStore.getActiveNode(ctx.chat.id);
+    const currentNode = hubStore.getActiveNode(scopeOf(ctx));
 
     if (!arg) {
       await sendFormatted(
@@ -1600,7 +1610,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
 
     if (arg === "reset" || arg === "default") {
-      hubStore.setModelOverride(ctx.chat.id, null);
+      hubStore.setModelOverride(scopeOf(ctx), null);
       await sendFormatted(
         ctx,
         `↩️ Model dikembalikan ke default: <code>${escapeHtml(defaultModel)}</code>`,
@@ -1609,12 +1619,12 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       return;
     }
 
-    hubStore.setModelOverride(ctx.chat.id, arg);
+    hubStore.setModelOverride(scopeOf(ctx), arg);
     await sendFormatted(ctx, `✅ Model AI untuk chat ini disetel ke: <code>${escapeHtml(arg)}</code>`, "html");
   });
 
   bot.command("usage", async (ctx) => {
-    const stats = hubStore.getUsage(ctx.chat.id);
+    const stats = hubStore.getUsage(scopeOf(ctx));
     await sendFormatted(
       ctx,
       `📊 <b>Statistik Token Chat Ini</b>\n` +
@@ -1627,15 +1637,22 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   });
 
   bot.command("reset", async (ctx) => {
-    const current = hubStore.getActiveNode(ctx.chat.id);
-    hubStore.resetChat(ctx.chat.id, current);
+    const current = hubStore.getActiveNode(scopeOf(ctx));
+    hubStore.resetChat(scopeOf(ctx), current);
     if (current && hub.getNode(current)) {
       try {
-        hub.startRun(current, ctx.chat.id, "__builtin:reset", {
-          onChunk: () => {},
-          onApprovalReq: () => {},
-          onDone: () => {},
-        });
+        hub.startRun(
+          current,
+          ctx.chat.id,
+          "__builtin:reset",
+          {
+            onChunk: () => {},
+            onApprovalReq: () => {},
+            onDone: () => {},
+          },
+          undefined,
+          { userId: ctx.from?.id }
+        );
       } catch {
         // abaikan jika node sedang sibuk/offline
       }
@@ -1655,7 +1672,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       return;
     }
 
-    hubStore.setActiveNode(ctx.chat!.id, target);
+    hubStore.setActiveNode(scopeOf(ctx), target);
     await ctx.answerCallbackQuery({ text: `Dipilih: ${target}` });
     await ctx.editMessageText(
       `✅ Node aktif disetel ke: <b>${escapeHtml(target)}</b> (<code>${escapeHtml(node.info.hostname)}</code>)\n` +
@@ -1693,7 +1710,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   bot.callbackQuery(/^ap:([^:]+):(yes|no)$/, async (ctx) => {
     const [, approvalId, decision] = ctx.match;
     const approved = decision === "yes";
-    const ok = hub.resolveApprovalById(approvalId!, approved, ctx.chat?.id);
+    const ok = hub.resolveApprovalById(approvalId!, approved, ctx.chat?.id, ctx.from?.id);
     await handleApprovalCallback(ctx, ok, approved);
   });
 
@@ -1701,7 +1718,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   bot.callbackQuery(/^appr:([^:]+):([^:]+):([^:]+):(yes|no)$/, async (ctx) => {
     const [, nodeId, runId, approvalId, decision] = ctx.match;
     const approved = decision === "yes";
-    const ok = hub.sendApproval(nodeId!, runId!, approvalId!, approved, ctx.chat?.id);
+    const ok = hub.sendApproval(nodeId!, runId!, approvalId!, approved, ctx.chat?.id, ctx.from?.id);
     await handleApprovalCallback(ctx, ok, approved);
   });
 

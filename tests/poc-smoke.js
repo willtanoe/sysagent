@@ -7,7 +7,7 @@ const { HubStore } = require("../dist/hub/store.js");
 const { RunProgress, renderProgress, extractTools, formatElapsed } = require("../dist/hub/progress.js");
 const { NodeClient } = require("../dist/node/client.js");
 const { NodeExecutor, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
-const { NodeEngine } = require("../dist/node/engine.js");
+const { NodeEngine, sessionKeyOf } = require("../dist/node/engine.js");
 const { isManagedOpenCode, resolveOpenCodeBinary } = require("../dist/node/opencode-server.js");
 const { OpenCodeRunner } = require("../dist/node/opencode.js");
 const {
@@ -700,6 +700,38 @@ async function runTests() {
   assert.ok(edits.some((h) => h.includes("Berpikir")) && edits.some((h) => h.includes("uptime")));
   console.log("✓ 27. Indikator progres live (typing, fase, timer, langkah tool, long-wait hint) lulus");
 
+  // 28. Sesi & state per-user (DM = chatId, grup = chatId:userId)
+  assert.strictEqual(sessionKeyOf(555, 555), 555, "DM tetap memakai chatId");
+  assert.strictEqual(sessionKeyOf(-1001, 7), "-1001:7");
+  assert.notStrictEqual(sessionKeyOf(-1001, 7), sessionKeyOf(-1001, 8));
+
+  const scopedStore = new HubStore(statePath);
+  scopedStore.setActiveNode("-1001:7", "hongyun");
+  scopedStore.setActiveNode("-1001:8", "hongchen");
+  assert.strictEqual(scopedStore.getActiveNode("-1001:7"), "hongyun");
+  assert.strictEqual(scopedStore.getActiveNode("-1001:8"), "hongchen");
+  scopedStore.remember("-1001:7", "hongyun", "q-A", "a-A");
+  assert.strictEqual(scopedStore.getHistory("-1001:8", "hongyun").length, 0, "riwayat user lain tidak bocor");
+  scopedStore.resetChat("-1001:7", "hongyun");
+  assert.strictEqual(scopedStore.getHistory("-1001:7", "hongyun").length, 0);
+  assert.strictEqual(scopedStore.getActiveNode("-1001:8"), "hongchen", "reset user A tidak memengaruhi user B");
+
+  const stoppedBy = [];
+  for (const uid of [7, 8]) {
+    hub.startRun("hongchen", -1001, "$ sleep 30", {
+      onChunk: () => {},
+      onApprovalReq: () => {},
+      onDone: (_r, err) => { if (err === "ABORTED") stoppedBy.push(uid); },
+    }, undefined, { userId: uid });
+  }
+  await sleep(250);
+  assert.strictEqual(hub.cancelChatRuns(-1001, 7), 1, "/stop hanya membatalkan run milik user 7");
+  await sleep(300);
+  assert.deepStrictEqual(stoppedBy, [7]);
+  assert.strictEqual(hub.cancelChatRuns(-1001, 8), 1);
+  await sleep(300);
+  console.log("✓ 28. Sesi, state, & /stop per-user di grup (DM tetap per-chat) lulus");
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -709,7 +741,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 27 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
+  console.log("SEMUA 28 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

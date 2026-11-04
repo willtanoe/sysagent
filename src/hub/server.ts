@@ -26,6 +26,7 @@ export interface ActiveRun {
   runId: string;
   nodeId: string;
   chatId: number;
+  userId?: number;
   startedAt: number;
   onChunk: (chunk: string) => void;
   onApprovalReq: (approvalId: string, command: string, reason: string) => void;
@@ -95,7 +96,7 @@ export class HubServer extends EventEmitter {
   private wss: WebSocketServer | null = null;
   private nodes = new Map<string, ConnectedNode>();
   private runs = new Map<string, ActiveRun>();
-  private approvals = new Map<string, { nodeId: string; runId: string; chatId: number }>();
+  private approvals = new Map<string, { nodeId: string; runId: string; chatId: number; userId?: number }>();
   private loopbackCookie = crypto.randomBytes(24).toString("hex");
 
   constructor(port: number, secretToken: string, opts?: HubServerOptions) {
@@ -346,6 +347,7 @@ export class HubServer extends EventEmitter {
                     nodeId: authenticatedNodeId,
                     runId: msg.runId,
                     chatId: run.chatId,
+                    userId: run.userId,
                   });
                   Promise.resolve(run.onApprovalReq(msg.approvalId, msg.command, msg.reason)).catch((err: any) => {
                     console.error("[hub] Gagal mengirim permintaan approval:", err?.message ?? err);
@@ -470,6 +472,7 @@ export class HubServer extends EventEmitter {
       runId,
       nodeId,
       chatId,
+      userId: opts?.userId,
       startedAt: Date.now(),
       ...handlers,
     });
@@ -505,12 +508,13 @@ export class HubServer extends EventEmitter {
     return true;
   }
 
-  cancelChatRuns(chatId: number): number {
+  /** Batalkan run di chat; jika userId diberikan, hanya run milik user tersebut (sesi per-user di grup). */
+  cancelChatRuns(chatId: number, userId?: number): number {
     let count = 0;
     for (const [runId, run] of this.runs.entries()) {
-      if (run.chatId === chatId) {
-        if (this.cancelRun(runId)) count += 1;
-      }
+      if (run.chatId !== chatId) continue;
+      if (userId !== undefined && run.userId !== undefined && run.userId !== userId) continue;
+      if (this.cancelRun(runId)) count += 1;
     }
     return count;
   }
@@ -521,9 +525,20 @@ export class HubServer extends EventEmitter {
     }
   }
 
-  sendApproval(nodeId: string, runId: string, approvalId: string, approved: boolean, chatId?: number): boolean {
+  sendApproval(
+    nodeId: string,
+    runId: string,
+    approvalId: string,
+    approved: boolean,
+    chatId?: number,
+    userId?: number
+  ): boolean {
     const tracked = this.approvals.get(approvalId);
     if (chatId !== undefined && tracked && tracked.chatId !== chatId) {
+      return false;
+    }
+    // Approval hanya boleh diputuskan oleh user yang memulai tugas
+    if (userId !== undefined && tracked?.userId !== undefined && tracked.userId !== userId) {
       return false;
     }
     this.approvals.delete(approvalId);
@@ -543,10 +558,10 @@ export class HubServer extends EventEmitter {
     return true;
   }
 
-  resolveApprovalById(approvalId: string, approved: boolean, chatId?: number): boolean {
+  resolveApprovalById(approvalId: string, approved: boolean, chatId?: number, userId?: number): boolean {
     const tracked = this.approvals.get(approvalId);
     if (!tracked) return false;
-    return this.sendApproval(tracked.nodeId, tracked.runId, approvalId, approved, chatId);
+    return this.sendApproval(tracked.nodeId, tracked.runId, approvalId, approved, chatId, userId);
   }
 
   async broadcastRun(

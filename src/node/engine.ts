@@ -41,6 +41,15 @@ export interface RunContext {
   onUsage?: (usage: TokenUsage) => void;
 }
 
+/**
+ * Kunci sesi OpenCode: DM memakai chatId (== userId), grup memakai "chatId:userId"
+ * sehingga tiap user di grup punya sesi percakapan sendiri.
+ */
+export function sessionKeyOf(chatId?: number, userId?: number): number | string {
+  const c = chatId ?? 0;
+  return c < 0 && userId ? `${c}:${userId}` : c;
+}
+
 export class NodeEngine {
   private executor: NodeExecutor;
   private engineMode: "opencode" | "local";
@@ -215,7 +224,7 @@ export class NodeEngine {
     }
 
     if (trimmed === "__builtin:reset") {
-      this.openCode?.clearSession(ctx?.chatId ?? 0);
+      this.openCode?.clearSession(sessionKeyOf(ctx?.chatId, ctx?.userId));
       return `[${this.nodeId}] Session direset.`;
     }
 
@@ -278,7 +287,7 @@ export class NodeEngine {
       const userId = ctx?.userId;
 
       return await this.openCode.run(eccEnhancement.rewrittenPrompt, {
-        chatId,
+        chatId: sessionKeyOf(chatId, userId),
         model: modelOverride || this.defaultModel,
         systemContext: this.buildSystemPrompt(eccEnhancement.contextBlock, ctx),
         dynamicContext: this.extraSystemContext?.(ctx),

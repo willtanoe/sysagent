@@ -93,11 +93,11 @@ export class HubStore {
     }
   }
 
-  getActiveNode(chatId: number): string | undefined {
+  getActiveNode(chatId: number | string): string | undefined {
     return this.state.activeNodes[String(chatId)];
   }
 
-  setActiveNode(chatId: number, nodeId: string | null): void {
+  setActiveNode(chatId: number | string, nodeId: string | null): void {
     if (nodeId === null) {
       delete this.state.activeNodes[String(chatId)];
     } else {
@@ -106,11 +106,11 @@ export class HubStore {
     this.scheduleSave();
   }
 
-  getHistory(chatId: number, nodeId: string): ChatHistoryItem[] {
+  getHistory(chatId: number | string, nodeId: string): ChatHistoryItem[] {
     return this.state.histories[`${chatId}:${nodeId}`] ?? [];
   }
 
-  remember(chatId: number, nodeId: string, prompt: string, reply: string): void {
+  remember(chatId: number | string, nodeId: string, prompt: string, reply: string): void {
     const key = `${chatId}:${nodeId}`;
     const list = [...(this.state.histories[key] ?? [])];
     const conciseReply = reply.replace(/\s+/g, " ").trim().slice(0, this.memoryChars);
@@ -124,7 +124,7 @@ export class HubStore {
     this.scheduleSave();
   }
 
-  resetChat(chatId: number, nodeId?: string): void {
+  resetChat(chatId: number | string, nodeId?: string): void {
     if (nodeId) {
       delete this.state.histories[`${chatId}:${nodeId}`];
     } else {
@@ -136,11 +136,11 @@ export class HubStore {
     this.scheduleSave();
   }
 
-  getModelOverride(chatId: number): string | undefined {
+  getModelOverride(chatId: number | string): string | undefined {
     return this.state.models[String(chatId)];
   }
 
-  setModelOverride(chatId: number, model: string | null): void {
+  setModelOverride(chatId: number | string, model: string | null): void {
     if (model === null) {
       delete this.state.models[String(chatId)];
     } else {
@@ -149,7 +149,7 @@ export class HubStore {
     this.scheduleSave();
   }
 
-  addUsage(chatId: number, usage: TokenUsage): void {
+  addUsage(chatId: number | string, usage: TokenUsage): void {
     const key = String(chatId);
     const current = this.state.usage[key] ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
     current.requests += 1;
@@ -159,7 +159,7 @@ export class HubStore {
     this.scheduleSave();
   }
 
-  getUsage(chatId: number): UsageStats {
+  getUsage(chatId: number | string): UsageStats {
     return this.state.usage[String(chatId)] ?? { requests: 0, promptTokens: 0, completionTokens: 0 };
   }
 
