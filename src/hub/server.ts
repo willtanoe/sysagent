@@ -58,6 +58,8 @@ export interface HubServerOptions {
   tlsKeyPath?: string;
   authTimeoutMs?: number;
   maxPayloadBytes?: number;
+  /** Usia maksimal permintaan approval (harus selaras APPROVAL_TIMEOUT_MS node). Default 300s. */
+  approvalTimeoutMs?: number;
 }
 
 /** Perbandingan token constant-time menggunakan SHA-256 digest agar aman dari timing attack. */
@@ -91,6 +93,8 @@ export class HubServer extends EventEmitter {
   private tlsKeyPath?: string;
   private authTimeoutMs: number;
   private maxPayloadBytes: number;
+  private approvalTimeoutMs: number;
+  private approvalCleanupTimer: NodeJS.Timeout | null = null;
   private httpServer: http.Server | null = null;
   private httpsServer: https.Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -112,6 +116,7 @@ export class HubServer extends EventEmitter {
     this.tlsKeyPath = opts?.tlsKeyPath;
     this.authTimeoutMs = opts?.authTimeoutMs ?? 5_000;
     this.maxPayloadBytes = opts?.maxPayloadBytes ?? 2 * 1024 * 1024;
+    this.approvalTimeoutMs = opts?.approvalTimeoutMs ?? 300_000;
   }
 
   getLoopbackConfig(): { url: string; cookie: string } {
@@ -245,6 +250,10 @@ export class HubServer extends EventEmitter {
         }
 
         this.wss = wss;
+
+        // GC periodik: permintaan approval yang kedaluwarsa dihapus dari memori.
+        this.approvalCleanupTimer = setInterval(() => this.cleanupExpiredApprovals(), 30_000);
+        this.approvalCleanupTimer.unref?.();
 
         wss.on("connection", (ws: WebSocket) => {
           let authenticatedNodeId: string | null = null;
@@ -412,6 +421,10 @@ export class HubServer extends EventEmitter {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
+      if (this.approvalCleanupTimer) {
+        clearInterval(this.approvalCleanupTimer);
+        this.approvalCleanupTimer = null;
+      }
       for (const [, node] of this.nodes) {
         try {
           node.ws.close();
@@ -532,6 +545,15 @@ export class HubServer extends EventEmitter {
     }
   }
 
+  private cleanupExpiredApprovals(): void {
+    const now = Date.now();
+    for (const [approvalId, meta] of this.approvals.entries()) {
+      if (meta.createdAt !== undefined && now - meta.createdAt > this.approvalTimeoutMs) {
+        this.approvals.delete(approvalId);
+      }
+    }
+  }
+
   sendApproval(
     nodeId: string,
     runId: string,
@@ -546,6 +568,11 @@ export class HubServer extends EventEmitter {
     }
     // Approval hanya boleh diputuskan oleh user yang memulai tugas
     if (userId !== undefined && tracked?.userId !== undefined && tracked.userId !== userId) {
+      return false;
+    }
+    // Approval kedaluwarsa tidak dapat diputuskan lagi (selaras timeout di sisi node).
+    if (tracked?.createdAt !== undefined && Date.now() - tracked.createdAt > this.approvalTimeoutMs) {
+      this.approvals.delete(approvalId);
       return false;
     }
     this.approvals.delete(approvalId);

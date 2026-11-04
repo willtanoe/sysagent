@@ -67,6 +67,8 @@ async function main() {
     nodeTokens,
     tlsCertPath: process.env.TLS_CERT_PATH,
     tlsKeyPath: process.env.TLS_KEY_PATH,
+    // Selaras dengan APPROVAL_TIMEOUT_MS node: approval kedaluwarsa tak bisa diputuskan lagi.
+    approvalTimeoutMs: intEnv(process.env.APPROVAL_TIMEOUT_MS, 300_000),
   });
   await hub.start();
 
