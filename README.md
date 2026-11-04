@@ -85,8 +85,6 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 │       └── distro.ts          # Deteksi distro Linux (/etc/os-release) & package manager
 ├── .opencode/                 # Konfigurasi OpenCode ECC (opencode.json, agents, commands, plugins, tools)
 ├── skills/                    # 31 Curated ECC Skills (SRE, Network, Docker/K8s, DB, Security, Safety Guard)
-├── contexts/                  # Konteks mode operasional ECC (dev, review, research)
-├── rules/common/              # Aturan standar keamanan, coding style, & verifikasi ECC
 ├── deploy/systemd/            # Unit systemd produksi (Full-Root & Isolated)
 ├── docs/                      # Dokumentasi lengkap arsitektur, deploy, keamanan, & operasi
 ├── tests/
