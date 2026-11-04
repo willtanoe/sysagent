@@ -2,7 +2,7 @@ import { NodeExecutor } from "./executor";
 import { distro } from "./distro";
 
 const UNIT_RE = /^[A-Za-z0-9@_.:-]+\.service$/;
-const RULE = "─".repeat(34);
+const RULE = "─".repeat(53);
 
 interface ServiceState {
   name: string;
@@ -129,14 +129,34 @@ function shorten(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
 }
 
-function serviceLine(service: ServiceState): string {
+function formatServiceCell(service: ServiceState): string {
   const icon = service.state === "up" ? "●" : service.state === "fail" ? "✕" : "○";
-  const label = service.state === "up" ? "up  " : service.state === "fail" ? "FAIL" : "down";
-  const memStr =
-    service.memoryBytes !== undefined && service.memoryBytes > 0
-      ? humanBytes(service.memoryBytes).padStart(6)
-      : "     -";
-  return `  ${shorten(service.name, 18).padEnd(18)} ${icon} ${label} ${memStr}`;
+  let memStr = "    -";
+  if (service.memoryBytes !== undefined && service.memoryBytes > 0) {
+    memStr = humanBytes(service.memoryBytes).padStart(5);
+  } else if (service.state === "fail") {
+    memStr = " FAIL";
+  } else if (service.state === "down") {
+    memStr = " down";
+  }
+  return `${icon} ${shorten(service.name, 16).padEnd(16)} ${memStr}`;
+}
+
+function renderTwoColumnServices(group: ServiceState[]): string[] {
+  const byAlpha = [...group].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: "base" })
+  );
+  const byRam = [...group].sort((a, b) => {
+    const memDiff = (b.memoryBytes ?? -1) - (a.memoryBytes ?? -1);
+    if (memDiff !== 0) return memDiff;
+    return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+  });
+
+  const rows: string[] = [];
+  for (let i = 0; i < byAlpha.length; i += 1) {
+    rows.push(`  ${formatServiceCell(byAlpha[i])} │ ${formatServiceCell(byRam[i])}`);
+  }
+  return rows;
 }
 
 async function resolveStatusUnits(executor: NodeExecutor, configuredUnits?: string[]): Promise<string[]> {
@@ -372,6 +392,9 @@ export async function buildNodeStatusText(
   );
 
   if (allServices.length > 0) {
+    lines.push(`  ${"Urut A-Z".padEnd(24)} │ ${"Urut Top RAM".padEnd(24)}`);
+    lines.push(`  ${"─".repeat(24)}─┼─${"─".repeat(24)}`);
+
     const byCategory = new Map<ServiceCategory, ServiceState[]>();
     for (const svc of allServices) {
       const cat = classifyServiceCategory(svc);
@@ -384,12 +407,10 @@ export async function buildNodeStatusText(
       const group = byCategory.get(cat);
       if (!group || group.length === 0) continue;
       const catMem = group.reduce((sum, s) => sum + (s.memoryBytes ?? 0), 0);
-      const catHeader = `[${cat}]`;
-      const catMemStr = catMem > 0 ? humanBytes(catMem).padStart(34 - 2 - catHeader.length) : "";
-      lines.push(`  ${catHeader}${catMemStr}`);
-      for (const service of group) {
-        lines.push(serviceLine(service));
-      }
+      const catHeader = `[${cat}]`.padEnd(24);
+      const catMemStr = catMem > 0 ? `total ${humanBytes(catMem)}`.padStart(24) : "".padStart(24);
+      lines.push(`  ${catHeader} │ ${catMemStr}`);
+      lines.push(...renderTwoColumnServices(group));
     }
   } else {
     lines.push("  (tidak ada service aktif)");
@@ -398,7 +419,7 @@ export async function buildNodeStatusText(
   if (pm2.length > 0) {
     const pm2UpCount = pm2.filter((a) => a.state === "up").length;
     lines.push(`pm2 (${pm2UpCount}/${pm2.length} online)`);
-    for (const app of pm2) lines.push(serviceLine(app));
+    lines.push(...renderTwoColumnServices(pm2));
   }
 
   if (top.length > 0 || topMem.length > 0) {

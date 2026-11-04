@@ -269,7 +269,11 @@ async function runTests() {
     "Status harus menampilkan detail memory lengkap (avail, buff/cache, swap)"
   );
   assert.ok(statusOut.includes("services ("), "Status harus menampilkan daftar service aktif beserta jumlahnya");
-  console.log("✓ 13. Dashboard monospace /status (service aktif + memory lengkap) berhasil dibangun dari node");
+  assert.ok(
+    statusOut.includes("Urut A-Z") && statusOut.includes("Urut Top RAM") && statusOut.includes("│"),
+    "Status harus menampilkan 2 kolom service (Urut A-Z │ Urut Top RAM)"
+  );
+  console.log("✓ 13. Dashboard monospace /status (service 2 kolom A-Z & Top RAM + memory lengkap) berhasil dibangun dari node");
 
   // 14. Pembatalan Tugas (/stop -> hub_cancel -> kill process tree)
   let cancelErr = "";
