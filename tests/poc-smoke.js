@@ -751,6 +751,134 @@ async function runTests() {
   fs.rmSync(testCfgDir, { recursive: true, force: true });
   console.log("✓ 29. Auto-inject custom Gateway dari .env ke instance OpenCode tanpa butuh HOME systemd lulus");
 
+  // 30. Batch Approval Aggregator, Deduplikasi Multi-Node, Pemisahan Tombol Setujui/Tolak, & Auto-Approval Memory
+  const { ApprovalBatcher } = require("../dist/hub/approval.js");
+
+  const mockTg = {
+    sendCalls: [],
+    editCalls: [],
+    answerCalls: [],
+    async sendMessage(chatId, text, opts) {
+      const msgId = 500 + mockTg.sendCalls.length;
+      mockTg.sendCalls.push({ chatId, text, opts, message_id: msgId });
+      return { message_id: msgId };
+    },
+    async editMessageText(chatId, messageId, text, opts) {
+      mockTg.editCalls.push({ chatId, messageId, text, opts });
+      return true;
+    },
+    async answerCallbackQuery(cbId, opts) {
+      mockTg.answerCalls.push({ cbId, opts });
+      return true;
+    },
+  };
+
+  const resolvedApprovals = new Map();
+  const testResolver = (approvalId, approved, chatId, userId) => {
+    resolvedApprovals.set(approvalId, { approved, chatId, userId });
+    return true;
+  };
+
+  const batcher = new ApprovalBatcher(mockTg, testResolver, {
+    debounceMs: 60,
+    cacheTtlMs: 60_000,
+  });
+
+  // Simulasi 5 node meminta approval untuk perintah yang sama secara serentak
+  const nodesSim = ["node-alpha", "node-bravo", "node-charlie", "node-delta", "node-echo"];
+  const cmdSim = "systemctl restart caddy";
+  const reasonSim = "opencode: shell";
+
+  for (let i = 0; i < nodesSim.length; i++) {
+    await batcher.onRequest({
+      nodeId: nodesSim[i],
+      approvalId: `appr_sim_${i}`,
+      command: cmdSim,
+      reason: reasonSim,
+      chatId: 1001,
+      userId: 777,
+      source: "broadcast",
+    });
+  }
+
+  // Sebelum debounce selesai: belum ada pesan terkirim
+  assert.strictEqual(mockTg.sendCalls.length, 0, "Pesan belum boleh dikirim sebelum debounce selesai");
+
+  // Tunggu debounce
+  await sleep(100);
+
+  // Verifikasi: TEPAT 1 pesan terkirim ke Telegram untuk 5 node (TIDAK ADA SPAM!)
+  assert.strictEqual(mockTg.sendCalls.length, 1, "Tepat 1 pesan terkirim untuk 5 node");
+  const sentMsg = mockTg.sendCalls[0];
+  assert.ok(sentMsg.text.includes("Persetujuan Diperlukan (5 Node)"));
+  assert.ok(sentMsg.text.includes("node-alpha, node-bravo, node-charlie, node-delta, node-echo"));
+  assert.ok(sentMsg.text.includes(cmdSim));
+
+  // Verifikasi tombol terpisah per baris (row) dan label eksplisit
+  const rows = sentMsg.opts.reply_markup.inline_keyboard;
+  assert.strictEqual(rows.length, 2, "Tombol Setujui dan Tolak harus berada di 2 baris terpisah");
+  assert.ok(rows[0][0].text.includes("Setujui Semua (5 Node)"));
+  assert.ok(rows[1][0].text.includes("Tolak Semua (5 Node)"));
+
+  const batchIdMatch = rows[0][0].callback_data.match(/^apb:([^:]+):yes$/);
+  assert.ok(batchIdMatch, "Callback data format harus apb:<batchId>:yes");
+  const testBatchId = batchIdMatch[1];
+  assert.ok(Buffer.byteLength(rows[0][0].callback_data, "utf8") <= 64, "Callback data <= 64 byte");
+
+  // Simulasi node ke-6 terlambat bergabung saat prompt masih menunggu
+  await batcher.onRequest({
+    nodeId: "node-foxtrot",
+    approvalId: "appr_sim_5",
+    command: cmdSim,
+    reason: reasonSim,
+    chatId: 1001,
+    userId: 777,
+    source: "broadcast",
+  });
+  await sleep(300);
+  assert.ok(mockTg.editCalls.length >= 1, "Pesan Telegram harus di-edit untuk menambahkan node ke-6");
+  const lastEdit = mockTg.editCalls[mockTg.editCalls.length - 1];
+  assert.ok(lastEdit.text.includes("Persetujuan Diperlukan (6 Node)"));
+  assert.ok(lastEdit.opts.reply_markup.inline_keyboard[0][0].text.includes("Setujui Semua (6 Node)"));
+
+  // Verifikasi otorisasi: pengguna lain (userId 999) ditolak saat menekan tombol
+  const fakeCtxOtherUser = {
+    from: { id: 999, first_name: "Hacker" },
+    answerCallbackQuery: async (opts) => mockTg.answerCallbackQuery("cb_hacker", opts),
+    api: mockTg,
+  };
+  const deniedResult = await batcher.handleCallback(fakeCtxOtherUser, testBatchId, true);
+  assert.strictEqual(deniedResult, false, "User lain tidak boleh menyetujui batch ini");
+
+  // Verifikasi operator sah (userId 777) menyetujui semua node sekaligus (1 klik untuk 6 node)
+  const validCtx = {
+    from: { id: 777, first_name: "Will", username: "willtanoe" },
+    answerCallbackQuery: async (opts) => mockTg.answerCallbackQuery("cb_valid", opts),
+    api: mockTg,
+  };
+  const approveResult = await batcher.handleCallback(validCtx, testBatchId, true);
+  assert.strictEqual(approveResult, true);
+  assert.strictEqual(resolvedApprovals.size, 6, "Semua 6 approval node harus disetujui serentak");
+  for (let i = 0; i < 6; i++) {
+    assert.strictEqual(resolvedApprovals.get(`appr_sim_${i}`).approved, true);
+  }
+
+  // Verifikasi Auto-Approval Memory: node ke-7 datang belakangan untuk perintah yang sama
+  const lateNodeReq = await batcher.onRequest({
+    nodeId: "node-straggler",
+    approvalId: "appr_sim_straggler",
+    command: cmdSim,
+    reason: reasonSim,
+    chatId: 1001,
+    userId: 777,
+  });
+  assert.strictEqual(lateNodeReq.autoResolved, true, "Straggler harus di-auto-resolve tanpa prompt");
+  assert.strictEqual(lateNodeReq.approved, true);
+  assert.strictEqual(mockTg.sendCalls.length, 1, "Tidak boleh ada pesan Telegram baru yang di-spam ke user");
+  assert.strictEqual(resolvedApprovals.get("appr_sim_straggler").approved, true);
+
+  console.log("✓ 30. Batch Approval Aggregator, Deduplikasi Multi-Node, Pemisahan Tombol Setujui/Tolak, & Auto-Approval Memory lulus");
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -760,7 +888,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 29 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
+  console.log("SEMUA 30 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

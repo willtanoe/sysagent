@@ -4,6 +4,7 @@ import { HubStore } from "./store";
 import { chunkHtml, escapeHtml, escapeRegExp, preBlock, renderMarkdown } from "../shared/format";
 import { RunProgress, formatElapsed } from "./progress";
 import { checkAndApplyUpdate, getGitVersionInfo, scheduleSelfRestart } from "../shared/updater";
+import { ApprovalBatcher } from "./approval";
 
 const SYNTAX_UNIT = /^[A-Za-z0-9@_.:-]+$/;
 
@@ -598,6 +599,17 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
   }
 
+  // Inisialisasi Aggregator Approval Multi-Node (Anti-Spam & Batch Approval)
+  const approvalBatcher = new ApprovalBatcher(
+    bot.api,
+    hub.resolveApprovalById.bind(hub)
+  );
+
+  const approvalCleanupTimer = setInterval(() => {
+    approvalBatcher.cleanupExpired();
+  }, 60_000);
+  approvalCleanupTimer.unref?.();
+
   // Forward alert proaktif dari node ke admin utama
   const primaryAdmin = config.allowedUsers[0];
   if (primaryAdmin !== undefined) {
@@ -632,29 +644,23 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
   }
 
-  // Forward permintaan approval lintas-node yang dipicu dari OpenCode Hub
+  // Forward permintaan approval lintas-node yang dipicu dari OpenCode Hub (Batch & Anti-Spam)
   hub.on(
     "remote_approval_req",
     (ev: { nodeId: string; runId: string; approvalId: string; command: string; reason: string; chatId?: number }) => {
       const targetChatId = ev.chatId && ev.chatId !== 0 ? ev.chatId : primaryAdmin;
       if (targetChatId === undefined) return;
       const boundTopic = getEffectiveAllowedTopic(targetChatId);
-      const kb = new InlineKeyboard()
-        .text("✅ Setujui", `ap:${ev.approvalId}:yes`)
-        .text("❌ Tolak", `ap:${ev.approvalId}:no`);
-      void bot.api
-        .sendMessage(
-          targetChatId,
-          `🔐 <b>[${escapeHtml(ev.nodeId)}] Konfirmasi Eksekusi (via OpenCode Hub)</b>\n` +
-            `Alasan: ${escapeHtml(ev.reason)}\n` +
-            `${preBlock(ev.command, "bash")}`,
-          {
-            parse_mode: "HTML",
-            reply_markup: kb,
-            ...(boundTopic && boundTopic > 1 ? { message_thread_id: boundTopic } : {}),
-          }
-        )
-        .catch((err) => console.error("[bot:remote-approval] Gagal kirim tombol approval:", err?.message));
+      void approvalBatcher.onRequest({
+        nodeId: ev.nodeId,
+        runId: ev.runId,
+        approvalId: ev.approvalId,
+        command: ev.command,
+        reason: ev.reason,
+        chatId: targetChatId,
+        topicId: boundTopic && boundTopic > 1 ? boundTopic : undefined,
+        source: "remote",
+      });
     }
   );
 
@@ -775,16 +781,21 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           },
           onApprovalReq: async (approvalId, command, reason) => {
             progress.setApprovalPending(true);
-            const kb = new InlineKeyboard()
-              .text("✅ Setujui", `ap:${approvalId}:yes`)
-              .text("❌ Tolak", `ap:${approvalId}:no`);
-
-            await ctx.reply(
-              `🔐 <b>Persetujuan Diperlukan di [${escapeHtml(nodeId)}]</b>\n` +
-                `Alasan: <i>${escapeHtml(reason)}</i>\n\n` +
-                `${preBlock(command, "bash")}`,
-              { parse_mode: "HTML", reply_markup: kb }
-            );
+            const topicId = ctx.message?.message_thread_id ?? getEffectiveAllowedTopic(chatId);
+            const res = await approvalBatcher.onRequest({
+              nodeId,
+              runId: currentRunId ?? undefined,
+              approvalId,
+              command,
+              reason,
+              chatId,
+              userId: ctx.from?.id,
+              topicId: topicId && topicId > 1 ? topicId : undefined,
+              source: "direct",
+            });
+            if (res.autoResolved) {
+              progress.setApprovalPending(false);
+            }
           },
           onDone: async (fullText, error, usage) => {
             editDisabled = true;
@@ -1359,18 +1370,17 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           .catch(() => undefined);
       },
       onApprovalReq: (nodeId, approvalId, command, reason) => {
-        const kb = new InlineKeyboard()
-          .text("✅ Setujui", `ap:${approvalId}:yes`)
-          .text("❌ Tolak", `ap:${approvalId}:no`);
-
-        void ctx
-          .reply(
-            `🔐 <b>[Broadcast] Persetujuan Diperlukan di [${escapeHtml(nodeId)}]</b>\n` +
-              `Alasan: <i>${escapeHtml(reason)}</i>\n\n` +
-              `${preBlock(command, "bash")}`,
-            { parse_mode: "HTML", reply_markup: kb }
-          )
-          .catch(() => undefined);
+        const topicId = ctx.message?.message_thread_id ?? getEffectiveAllowedTopic(chatId);
+        void approvalBatcher.onRequest({
+          nodeId,
+          approvalId,
+          command,
+          reason,
+          chatId,
+          userId,
+          topicId: topicId && topicId > 1 ? topicId : undefined,
+          source: "broadcast",
+        });
       },
     });
 
@@ -1713,6 +1723,13 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       })
       .catch(() => undefined);
   };
+
+  // Callback persetujuan batch (multi-node & de-spammed): apb:<batchId>:<yes|no>
+  bot.callbackQuery(/^apb:([^:]+):(yes|no)$/, async (ctx) => {
+    const [, batchId, decision] = ctx.match;
+    const approved = decision === "yes";
+    await approvalBatcher.handleCallback(ctx, batchId!, approved);
+  });
 
   // Callback persetujuan ringkas (<=64 byte): ap:<approvalId>:<yes|no>
   bot.callbackQuery(/^ap:([^:]+):(yes|no)$/, async (ctx) => {

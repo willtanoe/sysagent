@@ -96,7 +96,10 @@ export class HubServer extends EventEmitter {
   private wss: WebSocketServer | null = null;
   private nodes = new Map<string, ConnectedNode>();
   private runs = new Map<string, ActiveRun>();
-  private approvals = new Map<string, { nodeId: string; runId: string; chatId: number; userId?: number }>();
+  private approvals = new Map<
+    string,
+    { nodeId: string; runId: string; chatId: number; userId?: number; command?: string; reason?: string; createdAt?: number }
+  >();
   private loopbackCookie = crypto.randomBytes(24).toString("hex");
 
   constructor(port: number, secretToken: string, opts?: HubServerOptions) {
@@ -348,6 +351,9 @@ export class HubServer extends EventEmitter {
                     runId: msg.runId,
                     chatId: run.chatId,
                     userId: run.userId,
+                    command: msg.command,
+                    reason: msg.reason,
+                    createdAt: Date.now(),
                   });
                   Promise.resolve(run.onApprovalReq(msg.approvalId, msg.command, msg.reason)).catch((err: any) => {
                     console.error("[hub] Gagal mengirim permintaan approval:", err?.message ?? err);
@@ -563,6 +569,25 @@ export class HubServer extends EventEmitter {
     const tracked = this.approvals.get(approvalId);
     if (!tracked) return false;
     return this.sendApproval(tracked.nodeId, tracked.runId, approvalId, approved, chatId, userId);
+  }
+
+  getPendingApprovals(chatId?: number): Array<{
+    approvalId: string;
+    nodeId: string;
+    runId: string;
+    chatId: number;
+    userId?: number;
+    command?: string;
+    reason?: string;
+    createdAt?: number;
+  }> {
+    const list = [];
+    for (const [approvalId, meta] of this.approvals.entries()) {
+      if (chatId === undefined || meta.chatId === chatId) {
+        list.push({ approvalId, ...meta });
+      }
+    }
+    return list;
   }
 
   async broadcastRun(
