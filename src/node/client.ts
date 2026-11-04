@@ -212,7 +212,7 @@ export class NodeClient {
     }
 
     if (msg.type === "hub_run") {
-      const { runId, prompt, model, history, chatId, userId } = msg;
+      const { runId, prompt, model, history, chatId, userId, userName } = msg;
       console.log(`[node:${this.config.nodeId}] Menerima run [${runId}]: "${prompt.slice(0, 60)}"`);
 
       const controller = new AbortController();
@@ -273,6 +273,7 @@ export class NodeClient {
             history,
             chatId,
             userId,
+            userName,
             onUsage: (u) => {
               usage = u;
             },

@@ -460,7 +460,7 @@ export class HubServer extends EventEmitter {
       onDone: (fullText: string, error?: string, usage?: TokenUsage) => void;
     },
     model?: string,
-    opts?: { userId?: number; history?: ChatHistoryItem[] }
+    opts?: { userId?: number; userName?: string; history?: ChatHistoryItem[] }
   ): string {
     const node = this.nodes.get(nodeId);
     if (!node || node.ws.readyState !== WebSocket.OPEN) {
@@ -482,6 +482,7 @@ export class HubServer extends EventEmitter {
       runId,
       chatId,
       userId: opts?.userId,
+      userName: opts?.userName,
       prompt,
       model,
       history: opts?.history,
@@ -571,6 +572,7 @@ export class HubServer extends EventEmitter {
       nodeIds?: string[];
       model?: string;
       userId?: number;
+      userName?: string;
       getHistory?: (nodeId: string) => ChatHistoryItem[] | undefined;
       timeoutMs?: number;
       onProgress?: (progress: BroadcastNodeProgress[]) => void;
@@ -710,6 +712,7 @@ export class HubServer extends EventEmitter {
             opts?.model,
             {
               userId: opts?.userId,
+              userName: opts?.userName,
               history: opts?.getHistory?.(node.nodeId),
             }
           );

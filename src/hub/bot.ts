@@ -731,6 +731,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   ): Promise<void> {
     const chatId = ctx.chat?.id ?? 0;
     const userId = ctx.from?.id ?? 0;
+    const userName = [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(" ") || ctx.from?.username || undefined;
     const node = hub.getNode(nodeId);
 
     if (!node) {
@@ -823,7 +824,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           },
         },
         modelOverride,
-        { userId, history }
+        { userId, userName, history }
       );
     } catch (err: any) {
       progress.stop();
@@ -1299,6 +1300,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
     const chatId = ctx.chat?.id ?? 0;
     const userId = ctx.from?.id ?? 0;
+    const userName = [ctx.from?.first_name, ctx.from?.last_name].filter(Boolean).join(" ") || ctx.from?.username || undefined;
     const isDirectShell = prompt.startsWith("$ ");
     const modelOverride = hubStore.getModelOverride(scopeOf(ctx));
     const startedAt = Date.now();
@@ -1343,6 +1345,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const results = await hub.broadcastRun(chatId, prompt, {
       model: modelOverride,
       userId,
+      userName,
       getHistory: (nodeId) => (!isDirectShell ? hubStore.getHistory(scopeOf(ctx), nodeId) : undefined),
       onProgress: (progressList) => {
         if (boardClosed) return;

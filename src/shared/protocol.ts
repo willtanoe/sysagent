@@ -108,6 +108,7 @@ export interface HubRunPromptMsg {
   runId: string;
   chatId: number;
   userId?: number;
+  userName?: string;
   prompt: string;
   model?: string;
   history?: ChatHistoryItem[];

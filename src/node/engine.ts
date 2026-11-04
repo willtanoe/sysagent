@@ -38,6 +38,7 @@ export interface RunContext {
   history?: ChatHistoryItem[];
   chatId?: number;
   userId?: number;
+  userName?: string;
   onUsage?: (usage: TokenUsage) => void;
 }
 
@@ -150,9 +151,14 @@ export class NodeEngine {
 
   private buildSystemPrompt(eccContextBlock?: string, runCtx?: RunContext): string {
     const extra = this.extraSystemContext?.(runCtx)?.trim();
+    const userLine = runCtx?.userId
+      ? `- Lawan bicara saat ini di Telegram: ${runCtx.userName ? `${runCtx.userName} ` : ""}(User ID: ${runCtx.userId}). Jika dia menyapa (hai, halo, dsb), sapalah balik secara personal dan sebutkan identitasnya (nama/User ID).`
+      : undefined;
+
     return [
       `Anda adalah Aster, Sysadmin & SRE Agent di server node '${this.nodeId}' dengan integrasi ECC (Everything Claude Code).`,
       `- ${distroContext()}`,
+      ...(userLine ? [userLine] : []),
       ...(isRoot
         ? [
             "- PROSES INI BERJALAN SEBAGAI ROOT. Setiap perintah berisiko berdampak langsung ke sistem. Bersikap konservatif dan jelaskan dampak sebelum mengubah konfigurasi.",
