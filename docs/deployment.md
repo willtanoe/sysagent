@@ -10,7 +10,7 @@ Pastikan Node.js `>= 20.3` telah terpasang di server. Siapkan direktori instalas
 
 ```bash
 mkdir -p /opt/aster-fleet
-git clone -b full-root git@github.com:willtanoe/sysagent.git /opt/aster-fleet
+git clone -b root-ecc-integrate git@github.com:willtanoe/sysagent.git /opt/aster-fleet
 cd /opt/aster-fleet
 npm ci
 npm run build
@@ -122,12 +122,12 @@ ALERT_IGNORE_UNITS=
 
 ### 3.2 Pilih Varian Unit Systemd Node (Full-Root)
 
-Seluruh unit `systemd` di `deploy/systemd/` pada branch `full-root` telah dikonfigurasi untuk berjalan langsung sebagai `root` tanpa membutuhkan user tambahan:
+Seluruh unit `systemd` di `deploy/systemd/` telah dikonfigurasi untuk berjalan langsung sebagai `root` tanpa membutuhkan user tambahan, serta mendukung fitur **Auto-Update (`/update`)**:
 
 | File Unit | Peruntukan | Karakteristik Hardening |
 |---|---|---|
-| `aster-node.service` | **Default Full-Root** | Berjalan sebagai `root` di `/opt/aster-fleet` dengan `ReadOnlyPaths=/opt/aster-fleet`, `NoNewPrivileges=yes`, dan `UMask=0077`. |
-| `aster-node-isolated.service` | **Server Web / Multi-Tenant (Full-Root)** | Berjalan sebagai `root` di `/agent/aster-fleet` namun menyembunyikan `/home`, `/var/www`, dan `/srv` (`ProtectHome=true`, `InaccessiblePaths`) dari pandangan agent. |
+| `aster-node.service` | **Default Full-Root** | Berjalan sebagai `root` di `/opt/aster-fleet` dengan `ReadWritePaths=/var/lib/aster-node /opt/aster-fleet`, `ReadOnlyPaths=-/opt/aster-fleet/.env`, `NoNewPrivileges=yes`, dan `UMask=0077`. |
+| `aster-node-isolated.service` | **Server Web / Multi-Tenant (Full-Root)** | Berjalan sebagai `root` di `/agent/aster-fleet` dengan `ReadWritePaths=/var/lib/aster-node /agent/aster-fleet` dan `ReadOnlyPaths=-/agent/aster-fleet/.env`, serta menyembunyikan `/home`, `/var/www`, dan `/srv` (`ProtectHome=true`, `InaccessiblePaths`) dari pandangan agent. |
 | `aster-node-root.service` | **Alias Identik Full-Root** | Identik dengan `aster-node.service` untuk kompatibilitas penamaan skrip otomasi. |
 
 Contoh pemasangan di server Node (`aster-node.service`):
@@ -144,9 +144,39 @@ Karena proses Node berjalan sebagai `root` (`uid=0`), `NodeExecutor` secara otom
 
 ---
 
-## 4. Prosedur Update Produksi
+## 4. Prosedur Update Produksi & Auto-Update (`/update`)
 
-Untuk memperbarui Hub maupun Node ke rilis terbaru:
+### 4.1 Otomatis via Git Poller atau Perintah `/update` di Telegram
+Secara bawaan (`AUTO_UPDATE=true`), Hub dan seluruh Node otomatis mengecek commit baru di branch remote setiap 2 menit (`AUTO_UPDATE_INTERVAL_MS=120000`), atau dapat dipicu kapan saja lewat Telegram:
+- `/update` atau `/update all` — Menarik commit terbaru (`git pull --ff-only`), menjalankan `npm run build`, dan me-restart seluruh Node serta Hub.
+- `/update <node>` — Update & restart satu node tertentu.
+- `/update hub` — Update & restart Hub saja.
+- `/update status` — Mengecek branch & commit yang sedang berjalan di Hub dan seluruh Node.
+
+### 4.2 Penyesuaian `WorkingDirectory` Kustom pada Systemd
+Agar `git fetch`, `git pull`, dan `npm run build` tidak gagal karena error `Read-only file system`, pastikan unit `systemd` di `/etc/systemd/system/*.service` menempatkan working directory aplikasi di `ReadWritePaths` dan hanya mengunci file `.env` di `ReadOnlyPaths`:
+
+```ini
+ReadWritePaths=/var/lib/<service-name> <working-directory>
+ReadOnlyPaths=-<working-directory>/.env
+```
+
+- **Jika Anda menggunakan lokasi direktori kustom** (misalnya `/root/services/agentnode` atau `~/services/...`):
+  1. Sesuaikan `WorkingDirectory`, `EnvironmentFile`, `ExecStart`, `ReadWritePaths`, dan `ReadOnlyPaths` di `/etc/systemd/system/<service>.service`.
+  2. Jika direktori berada di dalam `/root` atau `/home`, pastikan `ProtectHome=true` **tidak** diaktifkan (hapus atau ubah menjadi `ProtectHome=false`), karena `ProtectHome=true` membuat `/root` dan `/home` tidak dapat diakses oleh proses `systemd`.
+  3. Pastikan direktori tersebut adalah git repository yang melacak (*tracking*) branch remote yang sesuai (contoh: `root-ecc-integrate`):
+     ```bash
+     cd <working-directory>
+     git checkout root-ecc-integrate
+     git branch --set-upstream-to=origin/root-ecc-integrate root-ecc-integrate
+     ```
+  4. Terapkan perubahan konfigurasi unit `systemd`:
+     ```bash
+     systemctl daemon-reload && systemctl restart <service>
+     ```
+
+### 4.3 Update Manual dari Terminal
+Jika Anda ingin memperbarui secara manual dari shell server:
 
 ```bash
 cd /opt/aster-fleet
@@ -156,7 +186,7 @@ npm run build
 npm test
 
 # Restart service yang sesuai di mesin tersebut:
+systemctl daemon-reload
 systemctl restart aster-hub   # di server Hub
 systemctl restart aster-node  # di server Node
 ```
-*(Catatan: karena unit systemd mengaktifkan `ReadOnlyPaths=/opt/aster-fleet`, perintah `git pull` dan `npm run build` dijalankan dari shell root di luar proses service).*

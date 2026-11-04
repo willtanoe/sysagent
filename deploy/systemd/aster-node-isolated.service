@@ -19,8 +19,8 @@ SyslogIdentifier=aster-node
 UMask=0077
 StateDirectory=aster-node
 StateDirectoryMode=0700
-ReadWritePaths=/var/lib/aster-node
-ReadOnlyPaths=/agent/aster-fleet
+ReadWritePaths=/var/lib/aster-node /agent/aster-fleet
+ReadOnlyPaths=-/agent/aster-fleet/.env
 NoNewPrivileges=yes
 # Sembunyikan /home dan direktori aplikasi web dari pandangan agent
 ProtectHome=true

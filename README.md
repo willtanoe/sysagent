@@ -128,6 +128,19 @@ Menjalankan 22 skenario pengujian tanpa ketergantungan jaringan luar: autentikas
 
 Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfigurasi *multi-server*), lihat panduan lengkap di **[docs/deployment.md](docs/deployment.md)**.
 
+> **Catatan Custom Working Directory & Systemd Auto-Update (`/update`)**:
+> - Jika Anda menempatkan folder aplikasi di luar `/opt/aster-fleet` (misalnya `/root/services/agentnode` atau `~/services/...`), pastikan Anda menyesuaikan `WorkingDirectory`, `EnvironmentFile`, `ExecStart`, `ReadWritePaths`, dan `ReadOnlyPaths` di `/etc/systemd/system/*.service`:
+>   ```ini
+>   ReadWritePaths=/var/lib/<service-name> <working-directory>
+>   ReadOnlyPaths=-<working-directory>/.env
+>   ```
+>   *(Jika menggunakan path di bawah `/root` atau `/home`, pastikan `ProtectHome=true` dihapus/dinonaktifkan).*
+> - Pastikan branch lokal sudah di-track ke branch remote (contoh: `git branch --set-upstream-to=origin/root-ecc-integrate root-ecc-integrate`).
+> - Setiap selesai mengubah file `.service`, jalankan:
+>   ```bash
+>   systemctl daemon-reload && systemctl restart <service>
+>   ```
+
 ---
 
 ## Daftar Perintah Telegram
@@ -145,6 +158,7 @@ Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfiguras
 | `/chat <prompt>` | Konsultasi & investigasi interaktif bersama AI SRE Agent (atau kirim pesan teks biasa) |
 | `/ecc [sub\|workflow]` | Melihat katalog ECC (`status`, `skills`, `agents`, `commands`) atau menjalankan workflow/skill/agent ECC di node aktif |
 | `/stop` | Menghentikan tugas yang sedang berjalan dan membunuh seluruh *process tree* shell di node |
+| `/update [all\|hub\|<node>\|status]` | Menarik update terbaru dari Git (`git pull` + `npm run build`) dan me-restart Node/Hub secara otomatis |
 | `/auditcheck [node]` | Memverifikasi keutuhan rantai hash SHA-256 pada file audit lokal di node |
 | `/model [id\|reset]` | Melihat atau mengganti model AI untuk chat ini |
 | `/usage` | Menampilkan statistik pemakaian token AI pada chat ini |
