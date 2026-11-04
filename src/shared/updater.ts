@@ -137,19 +137,27 @@ export async function checkAndApplyUpdate(opts?: {
 
   try {
     const info = await getGitVersionInfo(dir, execFn);
-    const branch = (opts?.branch || process.env.AUTO_UPDATE_BRANCH || info.branch).trim();
+    let branch = (opts?.branch || process.env.AUTO_UPDATE_BRANCH || info.branch).trim();
     if (!branch || branch === "HEAD" || branch === "unknown") {
-      return {
-        status: "failed",
-        branch: branch || "unknown",
-        fromCommit: info.shortCommit,
-        toCommit: info.shortCommit,
-        error: "Branch git tidak terdeteksi (detached HEAD atau bukan git repo).",
-        restartRequired: false,
-      };
+      branch = "root-ecc-integrate";
     }
 
-    const fetchRes = await execFn(`git fetch --prune ${remote} ${branch}`, dir, 60_000);
+    let fetchRes = await execFn(`git fetch --prune ${remote} ${branch}`, dir, 60_000);
+    let switchedBranch = false;
+
+    if (fetchRes.exitCode !== 0 && /couldn't find remote ref/i.test(fetchRes.output)) {
+      for (const fallback of ["root-ecc-integrate", "main"]) {
+        if (fallback === branch) continue;
+        const retry = await execFn(`git fetch --prune ${remote} ${fallback}`, dir, 60_000);
+        if (retry.exitCode === 0) {
+          branch = fallback;
+          fetchRes = retry;
+          switchedBranch = true;
+          break;
+        }
+      }
+    }
+
     if (fetchRes.exitCode !== 0) {
       return {
         status: "failed",
@@ -176,7 +184,7 @@ export async function checkAndApplyUpdate(opts?: {
     const remoteCommit = remoteRev.output.split("\n")[0]!.trim();
     const remoteShort = remoteCommit.slice(0, 7);
 
-    if (info.commit === remoteCommit && !opts?.forceBuild) {
+    if (info.commit === remoteCommit && !switchedBranch && !opts?.forceBuild) {
       return {
         status: "up_to_date",
         branch,
@@ -187,16 +195,18 @@ export async function checkAndApplyUpdate(opts?: {
     }
 
     const diffFilesRes = await execFn(
-      `git diff --name-only ${info.commit}..${remoteCommit}`,
+      `git diff --name-only ${info.commit}..${remoteCommit} 2>/dev/null || true`,
       dir,
       15_000
     );
     const changedFiles = diffFilesRes.output.split("\n").map((s) => s.trim());
     const depsChanged =
-      changedFiles.includes("package.json") || changedFiles.includes("package-lock.json");
+      switchedBranch ||
+      changedFiles.includes("package.json") ||
+      changedFiles.includes("package-lock.json");
 
     const logRes = await execFn(
-      `git log --oneline -n 5 ${info.commit}..${remoteCommit}`,
+      `git log --oneline -n 5 ${info.commit}..${remoteCommit} 2>/dev/null || git log --oneline -n 3 ${remoteCommit}`,
       dir,
       10_000
     );
@@ -204,7 +214,10 @@ export async function checkAndApplyUpdate(opts?: {
     // Reset perubahan lokal pada dist/ bila ada agar git pull --ff-only tidak tertahan
     await execFn("git checkout -- dist/ 2>/dev/null || true", dir, 10_000);
 
-    const pullRes = await execFn(`git pull --ff-only ${remote} ${branch}`, dir, 60_000);
+    const pullCmd = switchedBranch
+      ? `git checkout -f -B ${branch} --track ${remote}/${branch}`
+      : `git pull --ff-only ${remote} ${branch} || git reset --hard ${remote}/${branch}`;
+    const pullRes = await execFn(pullCmd, dir, 60_000);
     if (pullRes.exitCode !== 0) {
       return {
         status: "failed",
