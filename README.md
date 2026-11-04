@@ -48,6 +48,8 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
    - `block`: Perintah destruktif (`rm -rf /`, `mkfs`, fork bomb) dan pembacaan file rahasia (`.env`, `/etc/shadow`, `.ssh/*`, `hub-state.json`, `askpass`, bocoran `printenv`, termasuk *obfuscation* backslash/kurung kurawal maupun tool `read` OpenCode) langsung ditolak di level node tanpa opsi *override*, serta `subagent`/`question` di OpenCode dinonaktifkan (`deny`).
 5. **Tamper-Evident Audit Trail**: Setiap eksekusi di node dicatat ke file JSONL lokal (`0600`) dengan redaksi *secret* otomatis dan rantai hash SHA-256 yang dapat diverifikasi kapan saja lewat `/auditcheck`.
 6. **Alert Kesehatan Proaktif**: Setiap node memantau penggunaan Disk, Memory, dan unit `systemd` yang gagal, lalu meneruskan notifikasi *alert* dan pemulihan (*recovery*) secara *real-time* ke Telegram admin melalui Hub.
+7. **Batch Approval Multi-Node**: Permintaan persetujuan untuk perintah identik dari beberapa node digabung menjadi satu pesan dengan tombol `Setujui Semua` / `Tolak Semua`. Keputusan diingat 5 menit (hanya di memori Hub, per chat dan pengguna) agar node yang terlambat tidak memicu pesan berulang. Detail dan batasannya ada di [docs/security.md](docs/security.md).
+8. **Embedded Hub Node**: Secara default Hub juga menjalankan satu node internal (`HUB_EMBED_NODE=true`) sehingga operator bisa berdiskusi dengan agen di Hub, yang dapat mengoordinasikan node lain. Host Hub ikut menjadi target eksekusi di bawah aturan risiko yang sama. Set `HUB_EMBED_NODE=false` bila tidak diperlukan.
 
 ---
 
@@ -60,11 +62,15 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 │   │   ├── protocol.ts        # Kontrak pesan JSON WebSocket antara Hub & Node
 │   │   ├── risk.ts            # Classifier risiko (allow / approve / block) & heuristik read-only
 │   │   ├── audit.ts           # Hash-chained audit logger + redaksi secret + verifier
-│   │   └── format.ts          # Konversi Markdown -> HTML Telegram & safe <pre> chunking
+│   │   ├── format.ts          # Konversi Markdown -> HTML Telegram & safe <pre> chunking
+│   │   └── updater.ts         # Auto-update Git (pull, npm ci, build gate, self-restart)
 │   ├── hub/
-│   │   ├── index.ts           # Entrypoint Hub & concurrent Telegram runner
-│   │   ├── server.ts          # WS/WSS server, constant-time auth, registry, run coordinator
+│   │   ├── index.ts           # Entrypoint Hub, embedded node, & concurrent Telegram runner
+│   │   ├── server.ts          # WS/WSS server, constant-time auth, registry, run coordinator, loopback /internal/fleet
 │   │   ├── bot.ts             # Handler command Telegram, inline approval, alert forwarder
+│   │   ├── approval.ts        # ApprovalBatcher: batch approval multi-node & memori keputusan 5 menit
+│   │   ├── progress.ts        # Indikator progres live (typing, fase, timer, langkah tool)
+│   │   ├── fleet-ctl.ts       # CLI loopback agen Hub untuk mengendalikan node lain
 │   │   └── store.ts           # Persistensi atomik state Hub (mode 0600)
 │   └── node/
 │       ├── index.ts           # Entrypoint Node Agent & lifecycle ManagedOpenCodeServer
@@ -84,7 +90,7 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 ├── deploy/systemd/            # Unit systemd produksi (Full-Root & Isolated)
 ├── docs/                      # Dokumentasi lengkap arsitektur, deploy, keamanan, & operasi
 ├── tests/
-│   └── poc-smoke.js           # 22 skenario pengujian otomatis end-to-end, OpenCode, ECC, & keamanan
+│   └── poc-smoke.js           # 30 skenario pengujian otomatis end-to-end, OpenCode, ECC, fleet, approval, & keamanan
 ├── .env.example               # Template konfigurasi Hub & Node
 ├── .npmrc                     # Konfigurasi npm (omit=optional) untuk instalasi lintas platform
 └── package.json
@@ -114,7 +120,11 @@ npm run build
 ```bash
 npm test
 ```
-Menjalankan 22 skenario pengujian tanpa ketergantungan jaringan luar: autentikasi token master & per-node, eksekusi multi-node terisolasi, *approval gate*, pemblokiran perintah destruktif, sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`), pembatalan proses (`/stop`), *proactive alert*, integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), integrasi **ECC (Everything Claude Code)** (`listEccSkills`, `buildEccContextForPrompt`, `provisionOpenCodeEcc`, & RPC `__builtin:ecc`), serta *auto-reconnect*.
+Menjalankan 30 skenario pengujian tanpa ketergantungan jaringan luar:
+- **Keamanan & audit**: autentikasi token master & per-node, *approval gate*, pemblokiran perintah destruktif, sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`).
+- **Eksekusi & fleet**: eksekusi multi-node terisolasi, pembatalan proses (`/stop`), *proactive alert*, `/status all`, `/broadcast`, *embedded Hub node* beserta `fleet-ctl`, *auto-reconnect*.
+- **Engine AI**: integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), **ECC (Everything Claude Code)** (`listEccSkills`, `buildEccContextForPrompt`, `provisionOpenCodeEcc`, RPC `__builtin:ecc`), serta injeksi provider Gateway dari `.env`.
+- **Bot & UX**: auto-update poller, penguncian Topic (`/topic`), sesi per-user di grup, indikator progres live, dan **batch approval** (deduplikasi multi-node, tombol Setujui/Tolak Semua, memori keputusan).
 
 ### 3. Menjalankan Hub & Node
 - **Menjalankan Hub**:
@@ -147,7 +157,9 @@ Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfiguras
 
 | Perintah | Fungsi |
 |---|---|
+| `/start` | Informasi singkat bot dan perintah dasar |
 | `/nodes` | Menampilkan daftar server node yang terhubung beserta status *load*, RAM, *uptime*, dan tombol pilih cepat |
+| `/hub [prompt]` | Memilih OpenCode Hub (*embedded node*) sebagai target aktif; dengan `prompt`, menjalankannya sekali di Hub tanpa mengganti pilihan. Agen Hub dapat melihat dan menjalankan perintah di node lain (tetap lewat *approval gate*) |
 | `/use <node>` | Memilih server node aktif untuk sesi Anda (contoh: `/use student` atau `/use hub`) |
 | `/unuse` | Melepas pilihan server node cabang (otomatis kembali ke OpenCode Hub) |
 | `/status [node\|all]` | Dashboard lengkap node aktif, atau ringkasan compact seluruh *fleet* di chat dengan `/status all` |
@@ -172,7 +184,7 @@ Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfiguras
 
 ## Dokumentasi Lengkap
 
-- **[Arsitektur Sistem](docs/architecture.md)**: Protokol WebSocket Hub-Node, siklus hidup eksekusi, manajemen memori AI, dan struktur modul.
+- **[Arsitektur Sistem](docs/architecture.md)**: Protokol WebSocket Hub-Node, siklus hidup eksekusi, embedded Hub node, indikator progres, auto-update, dan struktur modul.
 - **[Panduan Deployment](docs/deployment.md)**: Langkah instalasi di server kantor, konfigurasi TLS/Nginx, manajemen token per-node, dan pemasangan unit `systemd`.
-- **[Model Keamanan & Hardening](docs/security.md)**: Pertahanan berlapis, sanitasi *environment*, penanganan `sudo`, isolasi `systemd`, dan *tamper-evident* audit.
+- **[Model Keamanan & Hardening](docs/security.md)**: Pertahanan berlapis, klasifikasi risiko, batch approval & memori keputusan, *tamper-evident* audit, dan hardening `systemd`.
 - **[Panduan Operasional (Runbook)](docs/operations.md)**: Penggunaan harian, *proactive alerting*, dukungan multi-distro, dan *troubleshooting*.

@@ -48,10 +48,28 @@ Seluruh perintah berikut dijalankan pada node yang sedang aktif di chat Anda:
    - Kirim `/model` tanpa argumen untuk melihat model aktif saat ini beserta daftar model gratis yang tersedia dari engine OpenCode di node aktif (misal `opencode/glm-5.3-flash-free`, `opencode/minimax-m2.5-free`, dll.).
    - Kirim `/model <provider/model>` untuk mengganti model pada sesi chat ini (otomatis membuat sesi OpenCode baru agar terhindar dari konflik riwayat `reasoning_content`).
    - Kirim `/model reset` untuk kembali ke model default node.
-4. **Mereset Sesi & Riwayat (`/reset`)**:
+5. **Mereset Sesi & Riwayat (`/reset`)**:
    Kirim `/reset` untuk menghapus riwayat percakapan dan statistik token pada node aktif di Hub sekaligus mereset sesi aktif OpenCode (`__builtin:reset`) di node tersebut.
-5. **Menghentikan Tugas (`/stop`)**:
+6. **Menghentikan Tugas (`/stop`)**:
    Jika suatu perintah atau sesi AI berjalan terlalu lama, kirim `/stop`. Hub akan mengirim sinyal `hub_cancel` ke node untuk membatalkan sesi OpenCode / loop AI dan membunuh seluruh *process group* shell (`SIGKILL`).
+7. **Indikator Progres**:
+   Selama AI bekerja, bot menampilkan aksi *typing* dan satu pesan status yang diperbarui (fase, waktu berjalan, langkah *tool* terakhir). Saat tugas selesai, pesan status dihapus dan hasil akhir dikirim sebagai pesan baru (dengan waktu proses bila lebih dari 5 detik).
+8. **Hub sebagai Target (`/hub`)**:
+   `/hub` memilih *embedded node* Hub sebagai target aktif, atau `/hub <prompt>` untuk satu kali tanya tanpa mengganti pilihan. Agen di Hub dapat melihat daftar node dan menjalankan perintah lintas node; setiap perintah tetap melewati *approval gate* di node tujuan.
+
+---
+
+## 3a. Persetujuan Batch & Memori Keputusan
+
+Bila beberapa node meminta persetujuan untuk perintah yang persis sama (umumnya dari `/broadcast` atau agen Hub), bot mengirim **satu pesan** dengan daftar node target, bukan satu pesan per node.
+
+- Tombol berbunyi `✅ Setujui Semua (N Node)` / `❌ Tolak Semua (N Node)`. Untuk satu node, tombol berbunyi `✅ Setujui` / `❌ Tolak`.
+- Daftar node di pesan diperbarui otomatis bila node lain ikut meminta dalam beberapa detik berikutnya.
+- Hanya pengguna yang menjalankan perintah yang bisa menekan tombol.
+- **Memori keputusan 5 menit**: setelah Anda memutuskan, permintaan identik dari node lain pada chat dan pengguna yang sama dalam 5 menit langsung diselesaikan dengan keputusan yang sama, tanpa pesan baru. Ini berlaku untuk persetujuan **dan** penolakan. Memori ini hilang bila Hub di-restart.
+- Bila ingin memaksa pertanyaan ulang, ubah perintah sedikit saja (kunci pencocokan adalah teks perintah persis) atau tunggu 5 menit.
+
+Detail dan batasan keamanannya ada di [security.md](security.md#3-batch-approval--auto-approval-memory-srchubapprovalts).
 
 ---
 
@@ -89,6 +107,8 @@ Node akan menghitung ulang rantai hash SHA-256 dari entri pertama (`GENESIS`) hi
 |---|---|---|
 | Node tidak muncul di `/nodes` | `HUB_URL` salah, port firewall Hub tertutup, atau token tidak cocok | Cek `journalctl -u aster-node -n 50` di server node; pastikan `NODE_TOKEN` / `HUB_TOKEN` sesuai dengan konfigurasi Hub |
 | Perintah `sudo` langsung gagal dengan pesan *password is required* | Node berjalan non-root tanpa `SUDO_PASSWORD` dan belum diatur `NOPASSWD` di sudoers | Tambahkan aturan `NOPASSWD` di `/etc/sudoers.d/aster` (disarankan) atau isi `SUDO_PASSWORD` di `.env` node |
-| Tombol *Setujui* tidak merespons | User yang menekan tidak ada di `ALLOWED_USER_ID` atau *approval* sudah kedaluwarsa | Cek `/id` dan pastikan ID Anda terdaftar di `ALLOWED_USER_ID` pada `.env` Hub |
+| Tombol *Setujui* tidak merespons | User yang menekan tidak ada di `ALLOWED_USER_ID`, bukan pengguna yang menjalankan perintah, atau *approval* sudah kedaluwarsa | Cek `/id` dan pastikan ID Anda terdaftar di `ALLOWED_USER_ID` pada `.env` Hub; tekan tombol dari akun yang sama dengan pemberi perintah |
+| Perintah langsung disetujui/ditolak tanpa tombol muncul | Memori keputusan 5 menit untuk perintah identik masih aktif | Tunggu 5 menit, ubah perintah, atau restart Hub untuk mengosongkan memori |
+| Agen Hub gagal menjalankan perintah di node lain | Embedded node tidak aktif, atau `ASTER_HUB_LOOPBACK_*` tidak diteruskan ke OpenCode Hub | Pastikan `HUB_EMBED_NODE` bukan `false` dan lihat log `[boot:hub-node]` di `journalctl -u aster-hub` |
 | Error `409 Conflict` di log Hub | Ada dua proses Hub yang menjalankan `TELEGRAM_BOT_TOKEN` yang sama | Hentikan salah satu proses Hub yang duplikat |
 | `/auditcheck` melaporkan rantai rusak | File `.jsonl` diedit manual atau ditimpa | Arsipkan/rotasi file audit lama agar node memulai rantai `GENESIS` baru, lalu periksa akses ke server tersebut |

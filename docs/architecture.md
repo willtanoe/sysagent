@@ -8,9 +8,21 @@ Dokumen ini menjelaskan desain internal, protokol komunikasi, dan alur kerja kom
 
 | Komponen | Lokasi | Tanggung Jawab Utama |
 |---|---|---|
-| **Aster Hub** (`src/hub/`) | 1 Server Koordinasi Pusat | Menjalankan Bot Telegram, menerima koneksi *inbound* WebSocket (`ws`/`wss`) dari seluruh node, memvalidasi token autentikasi, menyimpan state sesi chat (`HubStore`), meneruskan permintaan *approval* ke Telegram, dan mem-forward *alert* proaktif ke admin. **Hub tidak pernah mengeksekusi perintah shell di host-nya sendiri.** |
+| **Aster Hub** (`src/hub/`) | 1 Server Koordinasi Pusat | Menjalankan Bot Telegram, menerima koneksi *inbound* WebSocket (`ws`/`wss`) dari seluruh node, memvalidasi token autentikasi, menyimpan state sesi chat (`HubStore`), meneruskan permintaan *approval* ke Telegram (digabung oleh `ApprovalBatcher`), dan mem-forward *alert* proaktif ke admin. **Hub sendiri tidak mengeksekusi shell operator.** Eksekusi di host Hub hanya terjadi lewat *embedded node* (lihat bagian 6), yang tunduk pada `assessRisk` dan *approval gate* yang sama dengan node lain. |
 | **Aster Node** (`src/node/`) | Setiap Server / VPS Kantor | Menginisiasi koneksi *outbound* WebSocket ke Hub, mendeteksi distribusi OS (`distro.ts`), menjalankan loop AI tool-calling (`engine.ts`), menilai risiko perintah (`risk.ts`), mengeksekusi perintah dalam *process group* terisolasi (`executor.ts`), mencatat audit berantai hash (`audit.ts`), dan memantau kesehatan sistem (`alerts.ts`). |
-| **Shared Core** (`src/shared/`) | Digunakan bersama | Kontrak protokol pesan (`protocol.ts`), klasifikasi risiko (`risk.ts`), pencatat & verifikator rantai audit (`audit.ts`), serta pemformatan Markdown ke HTML Telegram (`format.ts`). |
+| **Shared Core** (`src/shared/`) | Digunakan bersama | Kontrak protokol pesan (`protocol.ts`), klasifikasi risiko (`risk.ts`), pencatat & verifikator rantai audit (`audit.ts`), pemformatan Markdown ke HTML Telegram (`format.ts`), serta auto-update berbasis Git (`updater.ts`). |
+
+Modul pendukung di `src/hub/`:
+
+| Modul | Fungsi |
+|---|---|
+| `bot.ts` | Handler perintah Telegram, callback *approval*, dan forwarder *alert*. |
+| `server.ts` | Server WS/WSS, registri node, koordinator *run*, dan endpoint loopback `/internal/fleet/*`. |
+| `approval.ts` | `ApprovalBatcher`: penggabungan *approval* multi-node dan memori keputusan 5 menit. |
+| `progress.ts` | `RunProgress`: indikator *typing*, fase kerja, timer, dan daftar langkah *tool* selama AI bekerja. |
+| `fleet-ctl.ts` | CLI kecil yang dipanggil agen OpenCode di Hub untuk mengendalikan node lain lewat loopback. |
+| `store.ts` | Persistensi atomik state Hub. |
+| `index.ts` | Entrypoint: Hub, bot, *embedded node*, dan *auto-update poller*. |
 
 ---
 
@@ -25,12 +37,14 @@ Seluruh komunikasi antara Hub dan Node menggunakan pesan JSON terstruktur di ata
 4. **`node_approval_req`**: Meminta persetujuan interaktif kepada operator di Telegram ketika perintah berstatus `approve` (`runId`, `approvalId`, `command`, `reason`).
 5. **`node_done`**: Menandakan eksekusi `runId` telah selesai, membawa `fullText`, opsional `error` (termasuk `"ABORTED"`), dan statistik `usage` token AI.
 6. **`node_alert`**: Mengirim notifikasi proaktif (`warn` atau `ok`) saat penggunaan Disk, RAM, atau unit `systemd` melewati ambang batas atau kembali pulih.
+7. **`node_pong`**: Balasan atas `hub_ping` dari Hub sebagai pemeriksaan koneksi hidup.
 
 ### B. Pesan dari Hub ke Node (`HubToNodeMsg`)
 1. **`hub_welcome`**: Balasan autentikasi (`success: true/false`, `message`). Jika gagal, koneksi langsung ditutup oleh Hub.
-2. **`hub_run`**: Meminta node menjalankan tugas baru (`runId`, `chatId`, `userId`, `prompt`, `model`, `history`).
+2. **`hub_run`**: Meminta node menjalankan tugas baru (`runId`, `chatId`, `userId`, `userName`, `prompt`, `model`, `history`). `userName` dipakai untuk personalisasi sapaan AI.
 3. **`hub_approval_res`**: Meneruskan keputusan operator (`approved: true/false`) atas `approvalId` tertentu.
 4. **`hub_cancel`**: Memerintahkan node untuk segera membatalkan `runId` yang sedang berjalan dan menghentikan seluruh *process tree* shell terkait.
+5. **`hub_ping`**: Pemeriksaan koneksi hidup; node membalas dengan `node_pong`.
 
 ---
 
@@ -52,6 +66,7 @@ sequenceDiagram
         Hub->>Admin: Tampilkan alasan pemblokiran
     else Verdict = approve
         Node->>Hub: node_approval_req (approvalId, command, reason)
+        Hub->>Hub: ApprovalBatcher: cek memori keputusan, gabungkan perintah identik
         Hub->>Admin: Tampilkan Inline Keyboard [Setujui / Tolak]
         Admin->>Hub: Klik tombol keputusan
         Hub->>Node: hub_approval_res (approvalId, approved)
@@ -112,3 +127,30 @@ sequenceDiagram
 - Riwayat percakapan padat per kombinasi `${chatId}:${nodeId}`.
 - *Override* model AI per `chatId` (dari perintah `/model`).
 - Akumulasi pemakaian token (`requests`, `promptTokens`, `completionTokens`) per `chatId`.
+
+---
+
+## 6. Embedded Hub Node & Fleet Controller (`src/hub/index.ts`, `src/hub/fleet-ctl.ts`)
+
+Secara default (`HUB_EMBED_NODE=true`), proses Hub juga menjalankan satu node internal (`HUB_NODE_ID`, default `hub`) yang terhubung ke Hub sendiri lewat `ws://127.0.0.1:<port>` (atau `wss://` bila TLS aktif). Node ini memakai `NodeEngine` dan `NodeExecutor` yang sama dengan node biasa, termasuk audit berantai hash di `HUB_AUDIT_PATH`.
+
+- **Engine**: `HUB_ENGINE` (fallback ke `ENGINE`), default `opencode` dengan daemon bundled. Port dan direktori datanya diatur lewat `HUB_OPENCODE_PORT` dan `HUB_OPENCODE_DATA_DIR`.
+- **Konteks fleet**: sistem prompt agen Hub diperkaya ringkasan node yang sedang online lewat `buildFleetContextSummary`.
+- **Kendali lintas node**: agen OpenCode di Hub memanggil `fleet-ctl.js` dengan subperintah `nodes`, `status`, `exec <node|all> "<cmd>"`, dan `broadcast "<cmd>"`. CLI ini menembak endpoint loopback `/internal/fleet/*` di Hub (hanya `127.0.0.1`, dengan cookie acak per proses), yang kemudian memanggil `executeRemoteCommand`. Perintah dikirim ke node target sebagai `$ <cmd>`, sehingga `assessRisk` dan *approval gate* tetap berlaku di node target.
+- **Pemilihan target**: bila operator belum memilih node lewat `/use`, chat otomatis diarahkan ke node Hub. `/unuse` mengembalikan ke default ini.
+
+---
+
+## 7. Indikator Progres & Auto-Update
+
+### Indikator progres (`src/hub/progress.ts`)
+Selama AI bekerja, `RunProgress` menjaga umpan balik tetap hidup: aksi *typing* setiap 4,5 detik dan satu pesan status yang diperbarui berisi fase (`thinking`, `tool`, `writing`, `approval`, `shell`), waktu berjalan, dan daftar langkah *tool* terakhir. Perintah yang diblokir ditandai, dan pesan akan memberi petunjuk bila proses berjalan lama.
+
+### Auto-update (`src/shared/updater.ts`)
+`AutoUpdateMonitor` memeriksa remote Git setiap `AUTO_UPDATE_INTERVAL_MS` (default 120000) pada `AUTO_UPDATE_REMOTE` dan `AUTO_UPDATE_BRANCH` (kosong berarti branch yang sedang aktif). Bila ada commit baru:
+1. Perubahan lokal di `dist/` dibuang agar tidak menghalangi pull.
+2. `git pull --ff-only`; bila gagal, fallback ke `git reset --hard <remote>/<branch>`.
+3. `npm ci --include=dev` (fallback `npm install`), lalu `npm run build`.
+4. Bila build gagal, proses lama tetap berjalan dan error dilaporkan. Restart hanya dijadwalkan setelah build sukses.
+
+Perhatikan langkah 2: fallback `reset --hard` menimpa perubahan lokal pada file yang dilacak Git. Jangan menyimpan modifikasi manual di direktori aplikasi pada node dengan `AUTO_UPDATE=true`.

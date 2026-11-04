@@ -17,6 +17,7 @@ Aster Fleet Manager dirancang dengan prinsip **Defense-in-Depth** untuk lingkung
    - `ALLOWED_CHAT_ID` memungkinkan penguncian operasional bot hanya pada ruang obrolan tertentu (misalnya DM pribadi atau grup *engineering* internal).
    - Setiap permintaan *approval* dipetakan di memori `HubServer` terhadap `(nodeId, runId, chatId)` dengan format `callback_data` ringkas (`ap:<approvalId>:yes|no`, selalu di bawah batas 64-byte API Telegram) dan divalidasi agar *chat* lain tidak dapat menyetujui *approval* milik *chat* berbeda.
    - Jika koneksi node terputus di tengah eksekusi, seluruh *run* dan *pending approval* untuk node tersebut otomatis dibatalkan dan dibersihkan.
+   - Permintaan *approval* untuk perintah identik dari beberapa node digabung oleh `ApprovalBatcher` (`src/hub/approval.ts`). Lihat bagian 3 untuk batasan keamanannya.
 4. **Sanitasi Environment Child Process (`sanitizeEnv`)**:
    - Sebelum mengeksekusi perintah shell di node, `NodeExecutor` menghapus seluruh variabel *environment* yang mengandung pola sensitif (`TOKEN`, `PASSWORD`, `PASSWD`, `SECRET`, `API`, `KEY`, `PRIVATE`, `CREDENTIAL`, `AUTH`, `JWT`, `DSN`, `DATABASE_URL`, `ASKPASS`).
    - Perintah seperti `echo $HUB_TOKEN` atau `echo $GATEWAY_API_KEY` di dalam shell anak selalu menghasilkan string kosong.
@@ -57,7 +58,26 @@ Setiap perintah shell maupun permintaan akses sumber daya—baik yang diketik la
 
 ---
 
-## 3. Tamper-Evident Audit Trail (`src/shared/audit.ts`)
+## 3. Batch Approval & Auto-Approval Memory (`src/hub/approval.ts`)
+
+Saat beberapa node meminta persetujuan untuk perintah yang sama (misalnya dari `/broadcast`), Hub tidak mengirim satu pesan per node. `ApprovalBatcher` menggabungkannya menjadi satu pesan Telegram.
+
+- **Kunci batch**: `chatId` + `userId` peminta + teks perintah yang dinormalisasi (`trim` dan penyeragaman `\r\n`). Perintah yang berbeda satu karakter pun tidak digabung.
+- **Debounce**: permintaan yang tiba dalam 350 ms bergabung ke pesan yang sama. Daftar node pada pesan diperbarui langsung saat node baru bergabung.
+- **Tombol**: `✅ Setujui` / `❌ Tolak` untuk 1 node, atau `✅ Setujui Semua (N Node)` / `❌ Tolak Semua (N Node)` untuk beberapa node. Format `callback_data` adalah `apb:<batchId>:yes|no`. Format lama `ap:<approvalId>:yes|no` dan `appr:...` tetap didukung.
+- **Otorisasi**: hanya `userId` yang menjalankan perintah yang boleh menekan tombol. Pengguna lain mendapat peringatan dan batch tetap menunggu.
+- **Auto-Approval Memory**: setelah operator memutuskan, keputusan itu disimpan di memori Hub selama **5 menit** (`cacheTtlMs`) dengan kunci yang sama dengan kunci batch. Permintaan identik dari node yang terlambat atau berurutan dalam jendela itu langsung diselesaikan dengan keputusan yang sama, tanpa pesan baru.
+
+Hal yang perlu diperhatikan:
+- Cache menyimpan **persetujuan maupun penolakan**.
+- Cache hanya hidup di memori proses Hub. Cache tidak ditulis ke disk dan hilang saat Hub di-restart.
+- Cache terikat pada `chatId` dan `userId`, sehingga keputusan satu operator tidak berlaku untuk operator atau chat lain.
+- Cache hanya mempercepat keputusan atas permintaan yang **sudah lolos** `assessRisk`. Perintah `block` ditolak di node dan tidak pernah sampai ke tahap *approval*.
+- Entri cache kedaluwarsa dan batch yang lebih dari 30 menit dibersihkan setiap 60 detik.
+
+---
+
+## 4. Tamper-Evident Audit Trail (`src/shared/audit.ts`)
 
 Setiap perintah yang masuk ke `NodeExecutor` dicatat ke file JSONL lokal dengan izin `0600`:
 - **Redaksi Otomatis (`redactSecrets`)**: Pola password, token, argumen `--password`, dan header `Bearer` disensor menjadi `[REDACTED]` sebelum ditulis ke disk.
@@ -66,8 +86,11 @@ Setiap perintah yang masuk ke `NodeExecutor` dicatat ke file JSONL lokal dengan 
 
 ---
 
-## 4. Hardening Systemd (`deploy/systemd/`)
+## 5. Hardening Systemd (`deploy/systemd/`)
 
-- **Pada Hub (`aster-hub.service`)**: Karena Hub tidak pernah menjalankan shell operator lokal, unit systemd Hub mengaktifkan isolasi penuh: `ProtectSystem=strict`, `ProtectHome=true`, `PrivateTmp=true`, `PrivateDevices=true`, `ProtectKernelTunables=true`, `NoNewPrivileges=yes`, `ReadWritePaths=/var/lib/aster-hub /opt/aster-fleet` (agar fitur `/update` dapat melakukan `git pull` & `npm run build`), serta mengunci kredensial dengan `ReadOnlyPaths=-/opt/aster-fleet/.env`.
-- **Pada Node (`aster-node*.service`)**: Mengizinkan penulisan ke `ReadWritePaths=/var/lib/aster-node <working-directory>` untuk pembaruan otomatis terverifikasi dan tetap mengunci file konfigurasi rahasia melalui `ReadOnlyPaths=-<working-directory>/.env`, ditambah `UMask=0077`, `StateDirectoryMode=0700`, `RestrictRealtime=yes`, `LockPersonality=yes`, `SystemCallArchitectures=native`, serta batas sumber daya `TasksMax=4096` dan `MemoryMax=2G`.
+Seluruh unit berjalan sebagai `root` (mode Full-Root), sehingga hardening difokuskan pada pembatasan privilege tambahan, izin file, dan sumber daya.
+
+- **Pada Hub (`aster-hub.service`)**: Hub menjalankan *embedded node* OpenCode secara default (`HUB_EMBED_NODE=true`), sehingga proses Hub **dapat mengeksekusi perintah shell** setelah melewati `assessRisk` dan *approval gate* yang sama seperti node biasa. Unit mengaktifkan `NoNewPrivileges=yes`, `UMask=0077`, `StateDirectory=aster-hub` dengan `StateDirectoryMode=0700`, `RestrictRealtime=yes`, `LockPersonality=yes`, `SystemCallArchitectures=native`, `RemoveIPC=yes`, serta batas `TasksMax=4096` dan `MemoryMax=2G`. Penulisan diizinkan ke `ReadWritePaths=/var/lib/aster-hub /opt/aster-fleet` (agar `/update` dapat menjalankan `git pull` dan `npm run build`), sedangkan kredensial dikunci dengan `ReadOnlyPaths=-/opt/aster-fleet/.env`. Unit Hub **tidak** mengaktifkan `ProtectSystem`, `ProtectHome`, atau `PrivateTmp`, karena agen embedded perlu mengakses filesystem host untuk inspeksi.
+- **Pada Node (`aster-node*.service`)**: Mengizinkan penulisan ke `ReadWritePaths=/var/lib/aster-node <working-directory>` untuk pembaruan otomatis terverifikasi dan tetap mengunci file konfigurasi rahasia melalui `ReadOnlyPaths=-<working-directory>/.env`, ditambah `UMask=0077`, `StateDirectoryMode=0700`, `RestrictRealtime=yes`, `LockPersonality=yes`, `SystemCallArchitectures=native`, `RemoveIPC=yes`, serta batas sumber daya `TasksMax=4096` dan `MemoryMax=2G`.
+- **Loopback Controller (`fleet-ctl`)**: Agen OpenCode di Hub mengendalikan node lain lewat endpoint HTTP internal `/internal/fleet/*`. Endpoint ini hanya menerima koneksi dari `127.0.0.1` / `::1` dan mewajibkan header `x-aster-loopback` berisi cookie acak 24-byte yang dibuat ulang setiap Hub start dan dibandingkan secara *constant-time*. Perintah yang dikirim lewat jalur ini tetap melewati `assessRisk` dan *approval gate*.
 - **Kompatibilitas `ProtectHome=true` (`aster-node-isolated.service`)**: `ManagedOpenCodeServer` mengarahkan seluruh variabel `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME`, dan `XDG_CONFIG_HOME` ke dalam direktori `/var/lib/aster-node/opencode-<nodeId>`, sedangkan `NodeExecutor.initSudo` memiliki *fallback* otomatis ke `/var/lib/aster-node/.aster-askpass` (`0700`) apabila `/home` dikunci oleh `ProtectHome=true`.

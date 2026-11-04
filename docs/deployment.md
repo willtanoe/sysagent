@@ -59,7 +59,15 @@ ALLOWED_CHAT_ID=
 
 HUB_STATE_FILE=/var/lib/aster-hub/hub-state.json
 NOTIFY_NODE_EVENTS=true
+
+# Embedded OpenCode Hub (aktif secara default). Hub menjalankan satu node internal sehingga
+# proses Hub dapat mengeksekusi perintah setelah approval. Set false untuk Hub murni koordinator.
+HUB_EMBED_NODE=true
+HUB_NODE_ID=hub
+HUB_ENGINE=opencode
 ```
+
+> **Catatan keamanan**: dengan `HUB_EMBED_NODE=true`, host Hub ikut menjadi target eksekusi (tetap di bawah `assessRisk` dan *approval gate*). Jika Hub tidak perlu dikelola, set `HUB_EMBED_NODE=false`. Port `8765` pada Hub menerima koneksi dari luar; autentikasi hanya berupa token, jadi batasi aksesnya dengan firewall atau TLS.
 
 ### 2.3 Pasang Service Systemd Hub (Full-Root)
 ```bash
@@ -118,7 +126,7 @@ ALERT_IGNORE_UNITS=
 ```
 
 > **Catatan Bundled OpenCode Engine (`@opencode/cli`)**:
-> Saat `npm ci` dijalankan, paket `@opencode/cli` otomatis mengunduh binary Linux yang sesuai untuk arsitektur server (`linux-x64` / `linux-arm64`) berkat konfigurasi `allowScripts` di `package.json`. Untuk memperbarui versi binary OpenCode di kemudian hari, cukup jalankan `npm run update:opencode`.
+> Saat `npm ci` dijalankan, skrip `postinstall` milik `@opencode/cli` memilih dan memasang binary yang sesuai dengan server (glibc/musl, `x64`/`arm64`, dengan varian *baseline* untuk CPU tanpa AVX2). Karena itu **jangan** memakai `npm ci --ignore-scripts`, dan pastikan server dapat mengakses registry npm saat instalasi. `.npmrc` berisi `omit=optional`; bila binary tidak ditemukan setelah instalasi, jalankan ulang `npm ci` dan periksa pesan error dari `postinstall`. Untuk memperbarui versi binary OpenCode di kemudian hari, jalankan `npm run update:opencode`.
 
 ### 3.2 Pilih Varian Unit Systemd Node (Full-Root)
 
