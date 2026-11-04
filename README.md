@@ -148,8 +148,7 @@ Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfiguras
 | Perintah | Fungsi |
 |---|---|
 | `/nodes` | Menampilkan daftar server node yang terhubung beserta status *load*, RAM, *uptime*, dan tombol pilih cepat |
-| `/hub [prompt]` | Beralih ke atau mengobrol langsung dengan **OpenCode di Hub** (AI Koordinator Pusat yang sadar seluruh *fleet*) |
-| `/use <node>` | Memilih server node aktif untuk sesi chat ini |
+| `/use <node>` | Memilih server node aktif untuk sesi Anda (contoh: `/use student` atau `/use hub`) |
 | `/unuse` | Melepas pilihan server node cabang (otomatis kembali ke OpenCode Hub) |
 | `/status [node\|all]` | Dashboard lengkap node aktif, atau ringkasan compact seluruh *fleet* di chat dengan `/status all` |
 | `/broadcast <prompt>` | Menjalankan konsultasi AI SRE atau perintah shell (`$ <cmd>`) secara serentak ke seluruh node yang terhubung |

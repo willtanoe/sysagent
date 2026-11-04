@@ -430,10 +430,9 @@ export function parseAllowedTopics(raw: string | undefined): {
 export const HUB_BOT_COMMANDS = [
   { command: "start", description: "Informasi bot & panduan singkat" },
   { command: "help", description: "Daftar lengkap perintah fleet & SRE" },
-  { command: "hub", description: "Chat / operasi langsung dengan OpenCode di Hub: /hub [pesan]" },
   { command: "nodes", description: "Daftar server node yang online" },
   { command: "use", description: "Pilih target node: /use <node>" },
-  { command: "unuse", description: "Lepas pilihan node (kembali ke OpenCode Hub)" },
+  { command: "unuse", description: "Lepas pilihan node (kembali ke default Hub)" },
   { command: "status", description: "Dashboard kondisi server (/status [node|all])" },
   { command: "broadcast", description: "Chat AI / shell serentak ke semua node: /broadcast <prompt>" },
   { command: "disk", description: "Cek penggunaan disk di node aktif" },
@@ -461,7 +460,10 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   const allowedChats = config.allowedChats ?? [];
   const defaultModel = config.defaultModel || process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash";
   const hubNodeId = config.hubNodeId || process.env.HUB_NODE_ID || "hub";
-  const knownCommands = new Set(HUB_BOT_COMMANDS.map((c) => c.command.toLowerCase()));
+  const knownCommands = new Set([
+    ...HUB_BOT_COMMANDS.map((c) => c.command.toLowerCase()),
+    "hub", // backward compatibility alias
+  ]);
 
   /**
    * Scope state per pengguna: DM memakai chatId (== userId), grup memakai "chatId:userId"
@@ -839,16 +841,25 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
   async function requireActiveNode(ctx: Context): Promise<string | null> {
     const current = hubStore.getActiveNode(scopeOf(ctx));
-    if (current) return current;
+    // Jika user sudah memilih node dan node tersebut masih online, gunakan node itu
+    if (current && hub.getNode(current)) {
+      return current;
+    }
 
-    // Default otomatis ke OpenCode Hub jika node embedded 'hub' sedang aktif
+    // Default otomatis: jika OpenCode Hub aktif, langsung gunakan hub tanpa tanya
     if (hub.getNode(hubNodeId)) {
       return hubNodeId;
     }
 
+    // Jika node embedded hub tidak aktif tapi ada node lain terhubung
     const nodes = hub.listNodes();
     if (nodes.length === 1 && nodes[0]) {
       return nodes[0].nodeId;
+    }
+
+    if (nodes.length === 0) {
+      await ctx.reply("❌ Tidak ada server node yang terhubung saat ini.");
+      return null;
     }
 
     const keyboard = new InlineKeyboard();
@@ -1210,17 +1221,11 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
     if (!prompt) {
       hubStore.setActiveNode(scopeOf(ctx), hubNodeId);
-      const otherNodes = hub
-        .listNodes()
-        .filter((n) => n.nodeId !== hubNodeId)
-        .map((n) => `<code>${escapeHtml(n.nodeId)}</code>`)
-        .join(", ");
       await sendFormatted(
         ctx,
-        `🧠 <b>OpenCode Hub (<code>${escapeHtml(hubNodeId)}</code>) Aktif</b>\n` +
-          `• Host: <code>${escapeHtml(hubNode.info.hostname)}</code>\n` +
-          `• Node Cabang Terhubung: ${otherNodes || "<i>(belum ada)</i>"}\n\n` +
-          `Anda sekarang bisa langsung mengetik pesan untuk berdiskusi dengan OpenCode di Hub, mengelola server Hub, atau meminta OpenCode Hub memeriksa/membandingkan kondisi antar node cabang.`,
+        `🧠 <b>Target Aktif: OpenCode Hub (<code>${escapeHtml(hubNodeId)}</code>)</b>\n` +
+          `• Host: <code>${escapeHtml(hubNode.info.hostname)}</code>\n\n` +
+          `Semua perintah atau chat sekarang diproses langsung oleh OpenCode di Hub.`,
         "html"
       );
       return;
