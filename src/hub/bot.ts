@@ -426,6 +426,41 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   const hubStore = store ?? new HubStore("./hub-state.json");
   const allowedChats = config.allowedChats ?? [];
   const defaultModel = config.defaultModel || process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash";
+  const knownCommands = new Set(HUB_BOT_COMMANDS.map((c) => c.command.toLowerCase()));
+
+  function getBotUsername(ctx: Context): string {
+    return (config.botName || ctx.me?.username || "").replace(/^@/, "").trim();
+  }
+
+  function isGroupMessageAddressedToBot(ctx: Context): boolean {
+    if (ctx.callbackQuery) return true;
+    const text = ctx.message?.text?.trim();
+    if (!text) return false;
+
+    const botUser = getBotUsername(ctx).toLowerCase();
+    const replyFrom = ctx.message?.reply_to_message?.from;
+    const isReplyToBot = Boolean(
+      replyFrom?.is_bot &&
+        ((ctx.me?.id && replyFrom.id === ctx.me.id) ||
+          (botUser && replyFrom.username?.toLowerCase() === botUser))
+    );
+
+    if (text.startsWith("/")) {
+      const m = /^\/([A-Za-z0-9_]+)(?:@([A-Za-z0-9_]+))?(?:\s|$)/.exec(text);
+      if (!m) return false;
+      const cmdName = m[1]!.toLowerCase();
+      const targetBot = (m[2] || "").toLowerCase();
+      if (!knownCommands.has(cmdName)) return false;
+      if (targetBot && botUser && targetBot !== botUser) return false;
+      return true;
+    }
+
+    if (botUser && text.toLowerCase().includes(`@${botUser}`)) {
+      return true;
+    }
+
+    return isReplyToBot;
+  }
 
   function isAuthorized(ctx: Context): boolean {
     const fromId = ctx.from?.id;
@@ -488,12 +523,16 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
   }
 
-  // Middleware Otorisasi
+  // Middleware Filter Grup & Otorisasi
   bot.use(async (ctx, next) => {
+    if (ctx.chat?.type !== "private" && !isGroupMessageAddressedToBot(ctx)) {
+      return;
+    }
+
     if (!isAuthorized(ctx)) {
       if (ctx.callbackQuery) {
         await ctx.answerCallbackQuery({ text: "⛔ Akses ditolak." }).catch(() => undefined);
-      } else if (ctx.message) {
+      } else if (ctx.message && ctx.chat?.type === "private") {
         await ctx.reply("⛔ Akses ditolak. User atau chat tidak terdaftar di allowlist.");
       }
       return;
@@ -1223,13 +1262,12 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     let prompt = ctx.message.text.trim();
     if (prompt.startsWith("/")) return;
 
-    // Jika di grup dan botName diset, dukung mention @botName
-    if (ctx.chat.type !== "private" && config.botName) {
-      const mention = `@${config.botName}`.toLowerCase();
-      if (!prompt.toLowerCase().includes(mention) && !prompt.startsWith("$ ")) {
-        return;
+    // Di grup, hapus mention @botUsername dari prompt sebelum dikirim ke node
+    if (ctx.chat.type !== "private") {
+      const botUser = getBotUsername(ctx);
+      if (botUser) {
+        prompt = prompt.replace(new RegExp(escapeRegExp(`@${botUser}`), "gi"), "").trim();
       }
-      prompt = prompt.replace(new RegExp(escapeRegExp(`@${config.botName}`), "gi"), "").trim();
     }
 
     if (!prompt) return;
