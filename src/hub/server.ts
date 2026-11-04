@@ -1,4 +1,5 @@
 import WebSocket, { WebSocketServer, RawData } from "ws";
+import * as http from "http";
 import * as https from "https";
 import * as fs from "fs";
 import * as crypto from "crypto";
@@ -89,11 +90,13 @@ export class HubServer extends EventEmitter {
   private tlsKeyPath?: string;
   private authTimeoutMs: number;
   private maxPayloadBytes: number;
+  private httpServer: http.Server | null = null;
   private httpsServer: https.Server | null = null;
   private wss: WebSocketServer | null = null;
   private nodes = new Map<string, ConnectedNode>();
   private runs = new Map<string, ActiveRun>();
   private approvals = new Map<string, { nodeId: string; runId: string; chatId: number }>();
+  private loopbackCookie = crypto.randomBytes(24).toString("hex");
 
   constructor(port: number, secretToken: string, opts?: HubServerOptions) {
     super();
@@ -105,6 +108,97 @@ export class HubServer extends EventEmitter {
     this.tlsKeyPath = opts?.tlsKeyPath;
     this.authTimeoutMs = opts?.authTimeoutMs ?? 5_000;
     this.maxPayloadBytes = opts?.maxPayloadBytes ?? 2 * 1024 * 1024;
+  }
+
+  getLoopbackConfig(): { url: string; cookie: string } {
+    const proto = this.tlsCertPath && this.tlsKeyPath ? "https" : "http";
+    return {
+      url: `${proto}://127.0.0.1:${this.port}`,
+      cookie: this.loopbackCookie,
+    };
+  }
+
+  private isLoopbackAddress(addr: string | undefined): boolean {
+    if (!addr) return false;
+    return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+  }
+
+  private handleInternalHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const url = req.url || "";
+    if (!url.startsWith("/internal/fleet/")) {
+      res.writeHead(426, { "Content-Type": "text/plain" });
+      res.end("Upgrade Required");
+      return;
+    }
+
+    if (!this.isLoopbackAddress(req.socket.remoteAddress)) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Loopback only" }));
+      return;
+    }
+
+    const providedCookie = String(req.headers["x-aster-loopback"] || "");
+    if (!verifySecretToken(providedCookie, this.loopbackCookie)) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized internal request" }));
+      return;
+    }
+
+    if (req.method === "GET" && url === "/internal/fleet/nodes") {
+      const nodes = this.listNodes().map((n) => ({
+        nodeId: n.nodeId,
+        info: n.info,
+        connectedAt: n.connectedAt,
+        lastSeen: n.lastSeen,
+      }));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ nodes }));
+      return;
+    }
+
+    if (req.method === "POST" && url === "/internal/fleet/exec") {
+      let body = "";
+      req.on("data", (chunk) => {
+        body += chunk.toString();
+        if (body.length > 256_000) req.destroy();
+      });
+      req.on("end", () => {
+        void (async () => {
+          try {
+            const parsed = JSON.parse(body || "{}") as {
+              nodeId?: string;
+              command?: string;
+              chatId?: number;
+              userId?: number;
+              timeoutMs?: number;
+            };
+            const targetNodeId = (parsed.nodeId || "").trim();
+            const command = (parsed.command || "").trim();
+            if (!targetNodeId || !command) {
+              res.writeHead(400, { "Content-Type": "application/json" });
+              res.end(JSON.stringify({ error: "nodeId dan command wajib diisi" }));
+              return;
+            }
+            const output = await this.executeRemoteCommand(
+              targetNodeId,
+              command,
+              parsed.chatId,
+              parsed.userId,
+              parsed.timeoutMs
+            );
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ status: "ok", output }));
+          } catch (err: any) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ status: "error", error: err?.message ?? String(err) }));
+          }
+        })();
+      });
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
   }
 
   private isValidTokenForNode(nodeId: string, token: string): boolean {
@@ -123,7 +217,9 @@ export class HubServer extends EventEmitter {
         if (this.tlsCertPath && this.tlsKeyPath) {
           const cert = fs.readFileSync(this.tlsCertPath);
           const key = fs.readFileSync(this.tlsKeyPath);
-          this.httpsServer = https.createServer({ cert, key });
+          this.httpsServer = https.createServer({ cert, key }, (req, res) =>
+            this.handleInternalHttpRequest(req, res)
+          );
           wss = new WebSocketServer({
             server: this.httpsServer,
             maxPayload: this.maxPayloadBytes,
@@ -133,17 +229,15 @@ export class HubServer extends EventEmitter {
             resolve();
           });
         } else {
-          wss = new WebSocketServer(
-            {
-              port: this.port,
-              host: this.host,
-              maxPayload: this.maxPayloadBytes,
-            },
-            () => {
-              console.log(`[hub] WS Server listening di ${this.host}:${this.port}`);
-              resolve();
-            }
-          );
+          this.httpServer = http.createServer((req, res) => this.handleInternalHttpRequest(req, res));
+          wss = new WebSocketServer({
+            server: this.httpServer,
+            maxPayload: this.maxPayloadBytes,
+          });
+          this.httpServer.listen(this.port, this.host, () => {
+            console.log(`[hub] WS Server listening di ${this.host}:${this.port}`);
+            resolve();
+          });
         }
 
         this.wss = wss;
@@ -321,20 +415,23 @@ export class HubServer extends EventEmitter {
       this.runs.clear();
       this.approvals.clear();
 
-      const closeHttps = () => {
+      const closeServers = () => {
         if (this.httpsServer) {
           this.httpsServer.close(() => resolve());
           this.httpsServer = null;
+        } else if (this.httpServer) {
+          this.httpServer.close(() => resolve());
+          this.httpServer = null;
         } else {
           resolve();
         }
       };
 
       if (this.wss) {
-        this.wss.close(() => closeHttps());
+        this.wss.close(() => closeServers());
         this.wss = null;
       } else {
-        closeHttps();
+        closeServers();
       }
     });
   }
@@ -616,5 +713,151 @@ export class HubServer extends EventEmitter {
     });
 
     return Promise.all(tasks);
+  }
+
+  /**
+   * Eksekusi perintah shell ($ <cmd>) atau built-in RPC ke satu node atau semua node ('all')
+   * dari OpenCode / AgentEngine yang berjalan di Hub.
+   */
+  async executeRemoteCommand(
+    targetNodeId: string,
+    command: string,
+    chatId = 0,
+    userId?: number,
+    timeoutMs = 90_000
+  ): Promise<string> {
+    const trimmed = command.trim();
+    const prompt =
+      trimmed.startsWith("__builtin:") || trimmed.startsWith("$ ") ? trimmed : `$ ${trimmed}`;
+
+    if (targetNodeId.toLowerCase() === "all") {
+      const results = await this.broadcastRun(chatId, prompt, {
+        userId,
+        timeoutMs,
+        onApprovalReq: (nodeId, approvalId, cmd, reason) => {
+          this.emit("remote_approval_req", { nodeId, runId: "", approvalId, command: cmd, reason, chatId });
+        },
+      });
+      if (results.length === 0) return "(Tidak ada node yang sedang online)";
+      return results
+        .map((r) => {
+          const header = `=== [${r.nodeId}] (${r.hostname} · ${r.distroName}) [${r.status.toUpperCase()} · ${r.durationMs}ms] ===`;
+          const body = r.status === "ok" ? r.fullText : `ERROR: ${r.error || "Unknown error"}`;
+          return `${header}\n${body}`;
+        })
+        .join("\n\n");
+    }
+
+    const node = this.getNode(targetNodeId);
+    if (!node || node.ws.readyState !== WebSocket.OPEN) {
+      const available = this.listNodes()
+        .map((n) => n.nodeId)
+        .join(", ");
+      throw new Error(
+        `Node "${targetNodeId}" tidak ditemukan atau sedang offline. Node yang online saat ini: ${available || "(kosong)"}`
+      );
+    }
+
+    return new Promise<string>((resolve, reject) => {
+      let settled = false;
+      let runId = "";
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        if (runId) {
+          this.cancelRun(runId);
+          this.clearApprovalsForRun(runId);
+          this.runs.delete(runId);
+        }
+        reject(new Error(`Timeout (${Math.round(timeoutMs / 1000)}s) menunggu respons dari node ${targetNodeId}`));
+      }, timeoutMs);
+      timer.unref?.();
+
+      try {
+        runId = this.startRun(
+          targetNodeId,
+          chatId,
+          prompt,
+          {
+            onChunk: () => undefined,
+            onApprovalReq: (approvalId, cmd, reason) => {
+              this.emit("remote_approval_req", {
+                nodeId: targetNodeId,
+                runId,
+                approvalId,
+                command: cmd,
+                reason,
+                chatId,
+              });
+            },
+            onDone: (fullText, error) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              if (error) {
+                reject(new Error(error));
+                return;
+              }
+              resolve(fullText);
+            },
+          },
+          undefined,
+          { userId }
+        );
+      } catch (err) {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        }
+      }
+    });
+  }
+
+  /** Bangun ringkasan konteks fleet live untuk disuntikkan ke OpenCode / AI di Hub. */
+  buildFleetContextSummary(hubNodeId = "hub", fleetCtlPath?: string, chatId?: number, userId?: number): string {
+    const nodes = this.listNodes().sort((a, b) =>
+      a.nodeId.localeCompare(b.nodeId, undefined, { sensitivity: "base" })
+    );
+    const nodeLines =
+      nodes.length === 0
+        ? ["  (Belum ada node yang terhubung)"]
+        : nodes.map((n) => {
+            const distro = n.info.distro
+              ? `${n.info.distro.id} ${n.info.distro.version}`.trim()
+              : `${n.info.platform}/${n.info.arch}`;
+            const load = n.info.loadAvg?.[0]?.toFixed(2) ?? "0.00";
+            const freeMb = n.info.memory?.freeMb ?? 0;
+            const totalMb = n.info.memory?.totalMb ?? 0;
+            const roleTag = n.nodeId === hubNodeId ? " [SERVER HUB LOKAL INI]" : "";
+            return `  - ${n.nodeId}${roleTag}: host=${n.info.hostname}, os=${distro}, cpu=${n.info.cpus}c, load=${load}, ram_free=${freeMb}/${totalMb}MB`;
+          });
+
+    const ctlFlags = [
+      chatId ? `--chat ${chatId}` : "",
+      userId ? `--user ${userId}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const flagSuffix = ctlFlags ? ` ${ctlFlags}` : "";
+
+    return [
+      "[KONTEKS KOORDINATOR PUSAT ASTER HUB]",
+      `Anda adalah AI Koordinator Pusat (OpenCode Hub) yang berjalan langsung di server Aster Hub ('${hubNodeId}').`,
+      "Anda dapat menjawab diskusi teknis/umum, mengelola server Hub lokal ini, SEKALIGUS memeriksa atau menjalankan perintah di seluruh server node cabang yang terhubung.",
+      `Daftar Node Online Saat Ini (${nodes.length} node):`,
+      ...nodeLines,
+      ...(fleetCtlPath
+        ? [
+            "",
+            "Cara Mengeksekusi Perintah ke Server Node Lain dari Shell (Bash Tool):",
+            `- Cek daftar node live: \`node ${fleetCtlPath} nodes\``,
+            `- Jalankan perintah di 1 node cabang: \`node ${fleetCtlPath} exec <node_id> "<perintah_shell>"${flagSuffix}\``,
+            `- Jalankan perintah serentak di semua node: \`node ${fleetCtlPath} broadcast "<perintah_shell>"${flagSuffix}\``,
+            `- Ambil dashboard status lengkap node: \`node ${fleetCtlPath} status <node_id|all>${flagSuffix}\``,
+          ]
+        : []),
+    ].join("\n");
   }
 }

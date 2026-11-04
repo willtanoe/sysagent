@@ -14,6 +14,7 @@ export interface OpenCodeServerOptions {
   port?: number;
   password?: string;
   dataDir?: string;
+  extraEnv?: Record<string, string>;
 }
 
 /** true jika node menggunakan engine opencode dan tidak memakai server eksternal (OPENCODE_URL kosong). */
@@ -100,6 +101,7 @@ export class ManagedOpenCodeServer {
 
     const env: NodeJS.ProcessEnv = {
       ...sanitizeEnv(process.env),
+      ...(this.opts.extraEnv ?? {}),
       OPENCODE_SERVER_PASSWORD: this.password,
       XDG_DATA_HOME: dataDir,
       XDG_STATE_HOME: stateDir,

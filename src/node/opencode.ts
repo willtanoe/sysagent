@@ -8,6 +8,7 @@ export interface OpenCodeRunDeps {
   chatId: number;
   model?: string;
   systemContext?: string;
+  dynamicContext?: string;
   signal?: AbortSignal;
   onPartial: (text: string) => void;
   askApproval: (command: string, reason: string) => Promise<boolean>;
@@ -257,6 +258,8 @@ export class OpenCodeRunner {
     let effectivePrompt = prompt;
     if (deps.systemContext && !this.primedSessions.has(sessionId)) {
       effectivePrompt = `${deps.systemContext}\n\nPermintaan operator:\n${prompt}`;
+    } else if (deps.dynamicContext) {
+      effectivePrompt = `${deps.dynamicContext}\n\nPermintaan operator:\n${prompt}`;
     }
     const promptResult = await this.api("POST", `/api/session/${sessionId}/prompt`, { text: effectivePrompt });
     if (promptResult.status >= 400) {

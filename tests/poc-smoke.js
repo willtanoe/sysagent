@@ -608,6 +608,44 @@ async function runTests() {
   assert.ok(bcastReport.includes("[1/2] hongchen") && bcastReport.includes("[2/2] hongyun"));
   console.log("✓ 24. Parallel Fleet Status (/status all native chat) & Multi-Node Broadcast (/broadcast) bekerja akurat");
 
+  // 25. Embedded OpenCode Hub, Fleet Context, & Cross-Node Loopback Controller (fleet-ctl)
+  const fleetCtlPath = path.join(__dirname, "../dist/hub/fleet-ctl.js");
+  const fleetCtx = hub.buildFleetContextSummary("hub", fleetCtlPath, 1001, 9001);
+  assert.ok(fleetCtx.includes("[KONTEKS KOORDINATOR PUSAT ASTER HUB]"));
+  assert.ok(fleetCtx.includes("hongchen") && fleetCtx.includes("hongyun"));
+  assert.ok(fleetCtx.includes("fleet-ctl.js exec"));
+
+  const remoteSingleOut = await hub.executeRemoteCommand("hongyun", "echo dari-hub-ke-hongyun", 1001, 9001);
+  assert.ok(remoteSingleOut.includes("dari-hub-ke-hongyun"), "Hub harus bisa mengeksekusi command ke node cabang");
+
+  const loopback = hub.getLoopbackConfig();
+  const { execFile } = require("child_process");
+  const { promisify } = require("util");
+  const execFileAsync = promisify(execFile);
+
+  const { stdout: ctlNodesOut } = await execFileAsync(process.execPath, [fleetCtlPath, "nodes"], {
+    env: {
+      ...process.env,
+      ASTER_HUB_LOOPBACK_URL: loopback.url,
+      ASTER_HUB_LOOPBACK_COOKIE: loopback.cookie,
+    },
+  });
+  assert.ok(ctlNodesOut.includes("hongyun") && ctlNodesOut.includes("hongchen"));
+
+  const { stdout: ctlExecOut } = await execFileAsync(
+    process.execPath,
+    [fleetCtlPath, "exec", "hongchen", "echo via-fleet-ctl-ok", "--chat", "1001"],
+    {
+      env: {
+        ...process.env,
+        ASTER_HUB_LOOPBACK_URL: loopback.url,
+        ASTER_HUB_LOOPBACK_COOKIE: loopback.cookie,
+      },
+    }
+  );
+  assert.ok(ctlExecOut.includes("via-fleet-ctl-ok"), "fleet-ctl.js harus berhasil mengeksekusi perintah ke node target");
+  console.log("✓ 25. Embedded OpenCode Hub, Fleet Context, & Cross-Node Loopback Controller (fleet-ctl) lulus");
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -617,7 +655,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 24 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET OPS LULUS!");
+  console.log("SEMUA 25 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

@@ -16,26 +16,19 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=aster-hub
 
-# --- Hardening Ketat (Mode Root Tanpa User Tambahan, Hub tidak pernah menjalankan shell lokal) ---
+# --- Hardening Mode Root (Hub + Embedded OpenCode Hub Agent) ---
 UMask=0077
 StateDirectory=aster-hub
 StateDirectoryMode=0700
 ReadWritePaths=/var/lib/aster-hub /opt/aster-fleet
 ReadOnlyPaths=-/opt/aster-fleet/.env
 NoNewPrivileges=yes
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-PrivateDevices=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
 RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
 RemoveIPC=yes
-TasksMax=512
-MemoryMax=1G
+TasksMax=4096
+MemoryMax=2G
 
 [Install]
 WantedBy=multi-user.target

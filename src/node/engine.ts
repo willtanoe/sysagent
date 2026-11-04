@@ -24,6 +24,13 @@ export interface EngineOptions {
   maxToolLoops?: number;
   maxReadOnlySteps?: number;
   statusServices?: string[];
+  extraSystemContext?: (ctx?: RunContext) => string;
+  remoteNodeExec?: (
+    targetNodeId: string,
+    command: string,
+    chatId?: number,
+    userId?: number
+  ) => Promise<string>;
 }
 
 export interface RunContext {
@@ -46,10 +53,19 @@ export class NodeEngine {
   private maxReadOnlySteps: number;
   private statusServices: string[];
   private nodeId: string;
+  private extraSystemContext?: (ctx?: RunContext) => string;
+  private remoteNodeExec?: (
+    targetNodeId: string,
+    command: string,
+    chatId?: number,
+    userId?: number
+  ) => Promise<string>;
 
   constructor(nodeId: string, executor: NodeExecutor, opts?: EngineOptions) {
     this.nodeId = nodeId;
     this.executor = executor;
+    this.extraSystemContext = opts?.extraSystemContext;
+    this.remoteNodeExec = opts?.remoteNodeExec;
     const rawMode = (opts?.engineMode || process.env.ENGINE || "local").toLowerCase();
     this.engineMode = rawMode === "opencode" ? "opencode" : "local";
 
@@ -123,7 +139,8 @@ export class NodeEngine {
     return chain.length > 0 ? chain : ["gpt-4o-mini"];
   }
 
-  private buildSystemPrompt(eccContextBlock?: string): string {
+  private buildSystemPrompt(eccContextBlock?: string, runCtx?: RunContext): string {
+    const extra = this.extraSystemContext?.(runCtx)?.trim();
     return [
       `Anda adalah Aster, Sysadmin & SRE Agent di server node '${this.nodeId}' dengan integrasi ECC (Everything Claude Code).`,
       `- ${distroContext()}`,
@@ -140,6 +157,7 @@ export class NodeEngine {
       "- sudo tersedia secara non-interaktif; jangan pernah menebak atau menampilkan password.",
       "- Gunakan gaya bahasa ops ringkas dan presisi dalam bahasa Indonesia.",
       "- Tampilkan data terstruktur (status, disk, service, port) sebagai tabel monospace di dalam blok kode.",
+      ...(extra ? ["", extra] : []),
       ...(eccContextBlock ? ["", eccContextBlock] : []),
     ].join("\n");
   }
@@ -262,7 +280,8 @@ export class NodeEngine {
       return await this.openCode.run(eccEnhancement.rewrittenPrompt, {
         chatId,
         model: modelOverride || this.defaultModel,
-        systemContext: this.buildSystemPrompt(eccEnhancement.contextBlock),
+        systemContext: this.buildSystemPrompt(eccEnhancement.contextBlock, ctx),
+        dynamicContext: this.extraSystemContext?.(ctx),
         signal,
         onPartial: (partialText) => {
           onChunk(partialText);
@@ -274,8 +293,9 @@ export class NodeEngine {
           const verdict = assessRisk(command);
           const isShell = reason === "opencode: shell";
           const isRead = reason === "opencode: read";
+          const isFleetCtl = isShell && /^\s*node\s+\S*fleet-ctl\.js\b/.test(command);
 
-          if (verdict.level === "block") {
+          if (verdict.level === "block" && !isFleetCtl) {
             this.executor.logAudit({
               command,
               exitCode: 126,
@@ -295,15 +315,19 @@ export class NodeEngine {
             return true;
           }
 
-          // Auto-approve untuk command shell read-only yang aman
-          if (isShell && (verdict.level === "allow" || (verdict.level === "approve" && isReadOnlyCommand(command)))) {
+          // Auto-approve untuk command shell read-only yang aman atau jembatan internal fleet-ctl.js
+          // (karena node tujuan tetap memvalidasi assessRisk & approval gate masing-masing)
+          if (
+            isFleetCtl ||
+            (isShell && (verdict.level === "allow" || (verdict.level === "approve" && isReadOnlyCommand(command))))
+          ) {
             this.executor.logAudit({
               command,
               exitCode: 0,
               durationMs: 0,
               risk: "allow",
               approved: true,
-              outputPreview: "opencode auto-allow",
+              outputPreview: isFleetCtl ? "opencode fleet-ctl bridge" : "opencode auto-allow",
               chatId,
               userId,
             });
@@ -346,7 +370,7 @@ export class NodeEngine {
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       {
         role: "system",
-        content: this.buildSystemPrompt(eccEnhancement.contextBlock),
+        content: this.buildSystemPrompt(eccEnhancement.contextBlock, ctx),
       },
     ];
 
@@ -389,6 +413,33 @@ export class NodeEngine {
           },
         },
       },
+      ...(this.remoteNodeExec
+        ? ([
+            {
+              type: "function",
+              function: {
+                name: "execute_remote_node",
+                description:
+                  "Jalankan perintah shell di node server lain yang terhubung ke Aster Hub (atau 'all' untuk seluruh node secara paralel).",
+                parameters: {
+                  type: "object",
+                  properties: {
+                    node_id: {
+                      type: "string",
+                      description: "ID node target (mis. 'hongyun', 'webhost-fit-vmware') atau 'all' untuk semua node.",
+                    },
+                    command: {
+                      type: "string",
+                      description: "Perintah shell bash yang akan dijalankan di node target.",
+                    },
+                  },
+                  required: ["node_id", "command"],
+                  additionalProperties: false,
+                },
+              },
+            },
+          ] as OpenAI.ChatCompletionTool[])
+        : []),
     ];
 
     const commandCount = new Map<string, number>();
@@ -462,7 +513,48 @@ export class NodeEngine {
 
         for (const tool of msg.tool_calls) {
           if (signal?.aborted) throw new Error(ABORTED);
-          if (tool.type !== "function" || tool.function.name !== "execute_shell") continue;
+          if (tool.type !== "function") continue;
+
+          if (tool.function.name === "execute_remote_node" && this.remoteNodeExec) {
+            let targetNodeId = "";
+            let remoteCmd = "";
+            try {
+              const parsed = JSON.parse(tool.function.arguments);
+              targetNodeId = (parsed.node_id ?? "").trim();
+              remoteCmd = (parsed.command ?? "").trim();
+            } catch {
+              // invalid json
+            }
+
+            if (!targetNodeId || !remoteCmd) {
+              messages.push({
+                role: "tool",
+                tool_call_id: tool.id,
+                content: "ERROR: argumen node_id dan command wajib diisi.",
+              });
+              continue;
+            }
+
+            onChunk(`\n🌐 \`[${targetNodeId}] $ ${remoteCmd}\`\n`);
+            try {
+              const remoteOut = await this.remoteNodeExec(targetNodeId, remoteCmd, ctx?.chatId, ctx?.userId);
+              executed.push({ command: `[${targetNodeId}] ${remoteCmd}`, exitCode: 0 });
+              messages.push({
+                role: "tool",
+                tool_call_id: tool.id,
+                content: truncateForModel(remoteOut),
+              });
+            } catch (err: any) {
+              messages.push({
+                role: "tool",
+                tool_call_id: tool.id,
+                content: `ERROR di node ${targetNodeId}: ${err?.message ?? String(err)}`,
+              });
+            }
+            continue;
+          }
+
+          if (tool.function.name !== "execute_shell") continue;
 
           let cmd = "";
           try {

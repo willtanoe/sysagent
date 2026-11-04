@@ -393,14 +393,16 @@ export interface BotConfig {
   allowedChats?: number[];
   defaultModel?: string;
   notifyNodeEvents?: boolean;
+  hubNodeId?: string;
 }
 
 export const HUB_BOT_COMMANDS = [
   { command: "start", description: "Informasi bot & panduan singkat" },
   { command: "help", description: "Daftar lengkap perintah fleet & SRE" },
+  { command: "hub", description: "Chat / operasi langsung dengan OpenCode di Hub: /hub [pesan]" },
   { command: "nodes", description: "Daftar server node yang online" },
   { command: "use", description: "Pilih target node: /use <node>" },
-  { command: "unuse", description: "Lepas pilihan target node" },
+  { command: "unuse", description: "Lepas pilihan node (kembali ke OpenCode Hub)" },
   { command: "status", description: "Dashboard kondisi server (/status [node|all])" },
   { command: "broadcast", description: "Chat AI / shell serentak ke semua node: /broadcast <prompt>" },
   { command: "disk", description: "Cek penggunaan disk di node aktif" },
@@ -426,6 +428,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   const hubStore = store ?? new HubStore("./hub-state.json");
   const allowedChats = config.allowedChats ?? [];
   const defaultModel = config.defaultModel || process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash";
+  const hubNodeId = config.hubNodeId || process.env.HUB_NODE_ID || "hub";
   const knownCommands = new Set(HUB_BOT_COMMANDS.map((c) => c.command.toLowerCase()));
 
   function getBotUsernames(ctx: Context): string[] {
@@ -545,6 +548,27 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       });
     }
   }
+
+  // Forward permintaan approval lintas-node yang dipicu dari OpenCode Hub
+  hub.on(
+    "remote_approval_req",
+    (ev: { nodeId: string; runId: string; approvalId: string; command: string; reason: string; chatId?: number }) => {
+      const targetChatId = ev.chatId && ev.chatId !== 0 ? ev.chatId : primaryAdmin;
+      if (targetChatId === undefined) return;
+      const kb = new InlineKeyboard()
+        .text("✅ Setujui", `ap:${ev.approvalId}:yes`)
+        .text("❌ Tolak", `ap:${ev.approvalId}:no`);
+      void bot.api
+        .sendMessage(
+          targetChatId,
+          `🔐 <b>[${escapeHtml(ev.nodeId)}] Konfirmasi Eksekusi (via OpenCode Hub)</b>\n` +
+            `Alasan: ${escapeHtml(ev.reason)}\n` +
+            `${preBlock(ev.command, "bash")}`,
+          { parse_mode: "HTML", reply_markup: kb }
+        )
+        .catch((err) => console.error("[bot:remote-approval] Gagal kirim tombol approval:", err?.message));
+    }
+  );
 
   // Middleware Filter Grup & Otorisasi
   bot.use(async (ctx, next) => {
@@ -694,7 +718,16 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const current = hubStore.getActiveNode(chatId);
     if (current) return current;
 
+    // Default otomatis ke OpenCode Hub jika node embedded 'hub' sedang aktif
+    if (hub.getNode(hubNodeId)) {
+      return hubNodeId;
+    }
+
     const nodes = hub.listNodes();
+    if (nodes.length === 1 && nodes[0]) {
+      return nodes[0].nodeId;
+    }
+
     const keyboard = new InlineKeyboard();
     nodes.forEach((n, idx) => {
       keyboard.text(n.nodeId, `select_node:${n.nodeId}`);
@@ -806,7 +839,50 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
   bot.command("unuse", async (ctx) => {
     hubStore.setActiveNode(ctx.chat.id, null);
+    if (hub.getNode(hubNodeId)) {
+      await sendFormatted(
+        ctx,
+        `ℹ️ Pilihan node cabang dilepas. Chat sekarang otomatis terhubung ke <b>OpenCode Hub</b> (<code>${escapeHtml(hubNodeId)}</code>).\nGunakan <code>/use &lt;node&gt;</code> jika ingin berpindah ke server tertentu.`,
+        "html"
+      );
+      return;
+    }
     await sendFormatted(ctx, "ℹ️ Target node dilepas. Gunakan <code>/use &lt;node&gt;</code> untuk memilih kembali.", "html");
+  });
+
+  bot.command("hub", async (ctx) => {
+    const prompt = (ctx.match ?? "").trim();
+    const hubNode = hub.getNode(hubNodeId);
+
+    if (!hubNode) {
+      await sendFormatted(
+        ctx,
+        `❌ Embedded OpenCode Hub (<code>${escapeHtml(hubNodeId)}</code>) belum aktif atau sedang offline.`,
+        "html"
+      );
+      return;
+    }
+
+    if (!prompt) {
+      hubStore.setActiveNode(ctx.chat.id, hubNodeId);
+      const otherNodes = hub
+        .listNodes()
+        .filter((n) => n.nodeId !== hubNodeId)
+        .map((n) => `<code>${escapeHtml(n.nodeId)}</code>`)
+        .join(", ");
+      await sendFormatted(
+        ctx,
+        `🧠 <b>OpenCode Hub (<code>${escapeHtml(hubNodeId)}</code>) Aktif</b>\n` +
+          `• Host: <code>${escapeHtml(hubNode.info.hostname)}</code>\n` +
+          `• Node Cabang Terhubung: ${otherNodes || "<i>(belum ada)</i>"}\n\n` +
+          `Anda sekarang bisa langsung mengetik pesan untuk berdiskusi dengan OpenCode di Hub, mengelola server Hub, atau meminta OpenCode Hub memeriksa/membandingkan kondisi antar node cabang.`,
+        "html"
+      );
+      return;
+    }
+
+    const isDirectShell = prompt.startsWith("$ ");
+    await executeOnNode(ctx, hubNodeId, prompt, { rememberInHistory: !isDirectShell });
   });
 
   async function runFleetSummary(ctx: Context): Promise<void> {
