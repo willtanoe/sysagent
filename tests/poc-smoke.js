@@ -732,6 +732,25 @@ async function runTests() {
   await sleep(300);
   console.log("✓ 28. Sesi, state, & /stop per-user di grup (DM tetap per-chat) lulus");
 
+  // 29. Auto-inject custom OpenAI-compatible Gateway dari .env ke instance OpenCode
+  const testCfgDir = path.join("/tmp", "opencode-ecc-env-test");
+  fs.rmSync(testCfgDir, { recursive: true, force: true });
+  process.env.GATEWAY_URL = "https://api.asteriaxlabs.com/v1";
+  process.env.GATEWAY_API_KEY = "sk-test-key-123";
+  process.env.OPENCODE_MODEL = "asteria/reflection/Beam-1.0-501B-A23B";
+
+  provisionOpenCodeEcc(testCfgDir);
+  const injectedFile = path.join(testCfgDir, "opencode", "opencode.json");
+  assert.ok(fs.existsSync(injectedFile), "opencode.json harus terbuat di sandbox");
+  const injectedJson = JSON.parse(fs.readFileSync(injectedFile, "utf8"));
+  assert.ok(injectedJson.provider && injectedJson.provider.asteria, "provider asteria harus ter-inject otomatis dari .env");
+  assert.strictEqual(injectedJson.provider.asteria.npm, "@ai-sdk/openai-compatible");
+  assert.strictEqual(injectedJson.provider.asteria.options.baseURL, "https://api.asteriaxlabs.com/v1");
+  assert.strictEqual(injectedJson.provider.asteria.options.apiKey, "sk-test-key-123");
+  assert.ok(injectedJson.provider.asteria.models["reflection/Beam-1.0-501B-A23B"], "model harus terdaftar di provider");
+  fs.rmSync(testCfgDir, { recursive: true, force: true });
+  console.log("✓ 29. Auto-inject custom Gateway dari .env ke instance OpenCode tanpa butuh HOME systemd lulus");
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -741,7 +760,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 28 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
+  console.log("SEMUA 29 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

@@ -362,7 +362,7 @@ export function provisionOpenCodeEcc(configDir: string, rootDir?: string): strin
     return targetOpenCodeDir;
   }
 
-  // Salin opencode.json dan merge provider dari global config (~/.config/opencode/opencode.json) jika ada
+  // Salin opencode.json dan inject custom gateway dari .env (atau merge dari global config jika ada)
   const srcConfigFile = path.join(srcOpenCodeDir, "opencode.json");
   const destConfigFile = path.join(targetOpenCodeDir, "opencode.json");
   if (fs.existsSync(srcConfigFile)) {
@@ -370,7 +370,11 @@ export function provisionOpenCodeEcc(configDir: string, rootDir?: string): strin
       const srcRaw = fs.readFileSync(srcConfigFile, "utf8");
       const configObj = JSON.parse(srcRaw);
 
-      // Cari config global di ~/.config/opencode/opencode.json untuk mewarisi provider kustom (Asteria Gateway dsb)
+      if (!configObj.provider || typeof configObj.provider !== "object") {
+        configObj.provider = {};
+      }
+
+      // 1. Pewarisan opsional dari global config host (~/.config/opencode/opencode.json)
       const homeDir = process.env.HOME || process.env.USERPROFILE || "";
       const globalConfigPath = homeDir ? path.join(homeDir, ".config", "opencode", "opencode.json") : "";
       if (globalConfigPath && fs.existsSync(globalConfigPath)) {
@@ -386,6 +390,65 @@ export function provisionOpenCodeEcc(configDir: string, rootDir?: string): strin
         } catch (e: any) {
           console.warn("[ecc] Gagal membaca provider global dari ~/.config/opencode/opencode.json:", e?.message);
         }
+      }
+
+      // 2. Pewarisan GENERIK langsung dari .env (GATEWAY_URL & GATEWAY_API_KEY / OPENCODE_GATEWAY_*)
+      //    Sehingga tidak bergantung pada file ~/.config/opencode/opencode.json maupun environment HOME systemd!
+      const gatewayUrl =
+        process.env.OPENCODE_GATEWAY_URL ||
+        process.env.GATEWAY_URL ||
+        process.env.GATEWAY_BASE_URL ||
+        process.env.OPENAI_BASE_URL;
+      const gatewayKey =
+        process.env.OPENCODE_GATEWAY_API_KEY ||
+        process.env.OPENCODE_GATEWAY_KEY ||
+        process.env.GATEWAY_API_KEY ||
+        process.env.OPENAI_API_KEY;
+
+      if (gatewayUrl && gatewayKey) {
+        // Deteksi providerID dan modelID dari OPENCODE_MODEL (misal: "asteria/reflection/Beam-1.0-501B-A23B")
+        const targetModelRaw = process.env.OPENCODE_MODEL || process.env.MODEL_NAME || "";
+        let providerId = "gateway";
+        let modelId = targetModelRaw;
+        const slashIdx = targetModelRaw.indexOf("/");
+        if (slashIdx > 0) {
+          providerId = targetModelRaw.slice(0, slashIdx);
+          modelId = targetModelRaw.slice(slashIdx + 1);
+        }
+
+        const modelsObj: Record<string, { name: string }> = {};
+        if (modelId) {
+          modelsObj[modelId] = { name: modelId };
+        }
+        // Tambahkan model fallback umum jika ada
+        const fallbacks = (process.env.MODEL_FALLBACK || "")
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean);
+        for (const fb of fallbacks) {
+          const fbSlash = fb.indexOf("/");
+          const fbId = fbSlash > 0 ? fb.slice(fbSlash + 1) : fb;
+          if (fbId) modelsObj[fbId] = { name: fbId };
+        }
+
+        // Daftarkan / merge provider ke opencode.json instance ini
+        // Nilai dari .env SELALU diprioritaskan (override) di atas global config!
+        const existingProvider = configObj.provider[providerId] || {};
+        configObj.provider[providerId] = {
+          npm: "@ai-sdk/openai-compatible",
+          name: `${providerId.toUpperCase()} Gateway`,
+          ...existingProvider,
+          options: {
+            setCacheKey: true,
+            ...(existingProvider.options || {}),
+            baseURL: gatewayUrl,
+            apiKey: gatewayKey,
+          },
+          models: {
+            ...(existingProvider.models || {}),
+            ...modelsObj,
+          },
+        };
       }
 
       fs.writeFileSync(destConfigFile, JSON.stringify(configObj, null, 2), { mode: 0o600 });
