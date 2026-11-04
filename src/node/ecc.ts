@@ -362,11 +362,36 @@ export function provisionOpenCodeEcc(configDir: string, rootDir?: string): strin
     return targetOpenCodeDir;
   }
 
-  // Salin opencode.json
+  // Salin opencode.json dan merge provider dari global config (~/.config/opencode/opencode.json) jika ada
   const srcConfigFile = path.join(srcOpenCodeDir, "opencode.json");
   const destConfigFile = path.join(targetOpenCodeDir, "opencode.json");
   if (fs.existsSync(srcConfigFile)) {
-    fs.copyFileSync(srcConfigFile, destConfigFile);
+    try {
+      const srcRaw = fs.readFileSync(srcConfigFile, "utf8");
+      const configObj = JSON.parse(srcRaw);
+
+      // Cari config global di ~/.config/opencode/opencode.json untuk mewarisi provider kustom (Asteria Gateway dsb)
+      const homeDir = process.env.HOME || process.env.USERPROFILE || "";
+      const globalConfigPath = homeDir ? path.join(homeDir, ".config", "opencode", "opencode.json") : "";
+      if (globalConfigPath && fs.existsSync(globalConfigPath)) {
+        try {
+          const globalRaw = fs.readFileSync(globalConfigPath, "utf8");
+          const globalObj = JSON.parse(globalRaw);
+          if (globalObj.provider && typeof globalObj.provider === "object") {
+            configObj.provider = {
+              ...(globalObj.provider || {}),
+              ...(configObj.provider || {}),
+            };
+          }
+        } catch (e: any) {
+          console.warn("[ecc] Gagal membaca provider global dari ~/.config/opencode/opencode.json:", e?.message);
+        }
+      }
+
+      fs.writeFileSync(destConfigFile, JSON.stringify(configObj, null, 2), { mode: 0o600 });
+    } catch {
+      fs.copyFileSync(srcConfigFile, destConfigFile);
+    }
   }
 
   // Symlink / copy subdirektori ECC (.opencode/instructions, prompts, commands, plugins, tools, dan skills)
