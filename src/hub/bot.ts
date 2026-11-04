@@ -2,6 +2,7 @@ import { Bot, Context, InlineKeyboard } from "grammy";
 import { BroadcastNodeProgress, ConnectedNode, HubServer, NodeBroadcastResult } from "./server";
 import { HubStore } from "./store";
 import { chunkHtml, escapeHtml, escapeRegExp, preBlock, renderMarkdown } from "../shared/format";
+import { RunProgress, formatElapsed } from "./progress";
 import { checkAndApplyUpdate, getGitVersionInfo, scheduleSelfRestart } from "../shared/updater";
 
 const SYNTAX_UNIT = /^[A-Za-z0-9@_.:-]+$/;
@@ -688,6 +689,27 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     await next();
   });
 
+  async function sendTypingAction(ctx: Context): Promise<unknown> {
+    const chatId = ctx.chat?.id;
+    if (chatId === undefined) return;
+    const msg = (ctx.message ?? ctx.callbackQuery?.message) as any;
+    const thread =
+      msg?.is_topic_message && typeof msg.message_thread_id === "number" && msg.message_thread_id > 1
+        ? msg.message_thread_id
+        : undefined;
+    return ctx.api.sendChatAction(chatId, "typing", thread ? { message_thread_id: thread } : undefined);
+  }
+
+  /** Pasang / hapus reaksi emoji di pesan pengguna (diabaikan jika grup melarang reaksi). */
+  async function setReaction(ctx: Context, emoji: "👀" | "👍" | "👎" | null): Promise<void> {
+    const chatId = ctx.chat?.id;
+    const messageId = ctx.message?.message_id;
+    if (chatId === undefined || messageId === undefined) return;
+    await ctx.api
+      .setMessageReaction(chatId, messageId, emoji ? [{ type: "emoji", emoji }] : [])
+      .catch(() => undefined);
+  }
+
   // Helper eksekusi prompt/command ke node tertentu
   async function executeOnNode(
     ctx: Context,
@@ -712,26 +734,17 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       parse_mode: "HTML",
     });
 
-    let lastText = "";
-    let lastEditTime = 0;
+    void setReaction(ctx, "👀");
+    const progress = new RunProgress({
+      nodeId,
+      prompt,
+      editIntervalMs: ctx.chat?.type === "private" ? 3000 : 4000,
+      sendTyping: () => sendTypingAction(ctx),
+      editStatus: (html) =>
+        ctx.api.editMessageText(chatId, initialMsg.message_id, html, { parse_mode: "HTML" }),
+    });
+    progress.start();
     let editDisabled = false;
-
-    const updatePreview = async (text: string) => {
-      if (editDisabled) return;
-      const now = Date.now();
-      if (now - lastEditTime < 1500) return;
-      lastEditTime = now;
-      try {
-        await ctx.api.editMessageText(
-          chatId,
-          initialMsg.message_id,
-          `⏳ <b>[${escapeHtml(nodeId)}]</b>\n<pre>${escapeHtml(text.slice(-3200))}</pre>`,
-          { parse_mode: "HTML" }
-        );
-      } catch {
-        // abaikan rate limit / unchanged text
-      }
-    };
 
     try {
       let currentRunId = "";
@@ -744,10 +757,10 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
         prompt,
         {
           onChunk: (chunk) => {
-            lastText += chunk;
-            void updatePreview(lastText);
+            progress.onChunk(chunk);
           },
           onApprovalReq: async (approvalId, command, reason) => {
+            progress.setApprovalPending(true);
             const kb = new InlineKeyboard()
               .text("✅ Setujui", `ap:${approvalId}:yes`)
               .text("❌ Tolak", `ap:${approvalId}:no`);
@@ -761,6 +774,9 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           },
           onDone: async (fullText, error, usage) => {
             editDisabled = true;
+            progress.stop();
+            const elapsedMs = progress.elapsedMs();
+            void setReaction(ctx, error ? (error === "ABORTED" ? null : "👎") : "👍");
             if (usage) {
               hubStore.addUsage(chatId, usage);
             }
@@ -788,7 +804,8 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
               return;
             }
 
-            const header = fullText.startsWith(`[${nodeId}]`) ? "" : `🖥️ **[${nodeId}]**\n`;
+            const took = elapsedMs >= 5000 ? ` · ⏱ ${formatElapsed(elapsedMs)}` : "";
+            const header = fullText.startsWith(`[${nodeId}]`) ? "" : `🖥️ **[${nodeId}]**${took}\n`;
             await sendFormatted(ctx, `${header}${fullText}`, "md");
           },
         },
@@ -796,6 +813,8 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
         { userId, history }
       );
     } catch (err: any) {
+      progress.stop();
+      void setReaction(ctx, "👎");
       await ctx.api
         .editMessageText(
           chatId,
@@ -1301,6 +1320,11 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     let lastEditTime = 0;
     let boardClosed = false;
 
+    void setReaction(ctx, "👀");
+    void sendTypingAction(ctx).catch(() => undefined);
+    const typingTimer = setInterval(() => void sendTypingAction(ctx).catch(() => undefined), 4500);
+    typingTimer.unref?.();
+
     const results = await hub.broadcastRun(chatId, prompt, {
       model: modelOverride,
       userId,
@@ -1333,6 +1357,8 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     });
 
     boardClosed = true;
+    clearInterval(typingTimer);
+    void setReaction(ctx, results.some((r) => r.status === "ok") ? "👍" : "👎");
     for (const res of results) {
       if (res.usage) {
         hubStore.addUsage(chatId, res.usage);

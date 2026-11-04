@@ -4,6 +4,7 @@ const path = require("path");
 const { HubServer, parseNodeTokens } = require("../dist/hub/server.js");
 const { formatFleetSummaryReport, formatBroadcastReport, parseAllowedTopics } = require("../dist/hub/bot.js");
 const { HubStore } = require("../dist/hub/store.js");
+const { RunProgress, renderProgress, extractTools, formatElapsed } = require("../dist/hub/progress.js");
 const { NodeClient } = require("../dist/node/client.js");
 const { NodeExecutor, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
 const { NodeEngine } = require("../dist/node/engine.js");
@@ -666,6 +667,39 @@ async function runTests() {
   assert.strictEqual(reloadedTopicStore.hasAnyHiddenGroupMenu(), false);
   console.log("✓ 26. Forum Topic Locking (/topic & ALLOWED_TOPIC_ID) dan Group Menu State lulus");
 
+  // 27. Indikator progres live (typing, fase, timer, langkah tool)
+  const toolsParsed = extractTools("halo\n⚙️ `df -h`\n🌐 `[hongyun] $ uptime`\n🚫 **[BLOCKED]** destruktif: `rm -rf /`\n");
+  assert.deepStrictEqual(
+    toolsParsed.map((x) => [x.command, x.remote, x.blocked]),
+    [["df -h", false, false], ["[hongyun] $ uptime", true, false], ["rm -rf /", false, true]]
+  );
+  assert.strictEqual(formatElapsed(75_000), "1m 15s");
+  const thinkingHtml = renderProgress({ nodeId: "hub", phase: "thinking", elapsedMs: 12_000, tools: [], textTail: "", frame: 0 });
+  assert.ok(thinkingHtml.includes("Berpikir") && thinkingHtml.includes("12s"));
+  const toolHtml = renderProgress({ nodeId: "hub", phase: "tool", elapsedMs: 25_000, tools: toolsParsed.slice(0, 1), textTail: "", frame: 1 });
+  assert.ok(toolHtml.includes("⏳") && toolHtml.includes("df -h") && toolHtml.includes("Masih berjalan"));
+
+  let typingCalls = 0;
+  const edits = [];
+  const rp = new RunProgress({
+    nodeId: "hub",
+    prompt: "cek server",
+    editIntervalMs: 60,
+    typingIntervalMs: 60,
+    sendTyping: async () => { typingCalls += 1; },
+    editStatus: async (html) => { edits.push(html); },
+  });
+  rp.start();
+  await sleep(200);
+  rp.onChunk("\n⚙️ `uptime`\n");
+  await sleep(150);
+  rp.stop();
+  const callsAtStop = typingCalls;
+  await sleep(150);
+  assert.ok(typingCalls >= 3 && typingCalls === callsAtStop, "typing berjalan berkala & berhenti setelah stop()");
+  assert.ok(edits.some((h) => h.includes("Berpikir")) && edits.some((h) => h.includes("uptime")));
+  console.log("✓ 27. Indikator progres live (typing, fase, timer, langkah tool, long-wait hint) lulus");
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -675,7 +709,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 26 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
+  console.log("SEMUA 27 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }
