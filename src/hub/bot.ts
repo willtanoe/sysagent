@@ -6,17 +6,205 @@ import { checkAndApplyUpdate, getGitVersionInfo, scheduleSelfRestart } from "../
 
 const SYNTAX_UNIT = /^[A-Za-z0-9@_.:-]+$/;
 
-function fitText(text: string, width: number): string {
-  if (text.length > width) return `${text.slice(0, width - 1)}…`;
-  return text.padEnd(width);
-}
-
 function stripNodePrefix(nodeId: string, text: string): string {
   const escaped = escapeRegExp(nodeId);
   return text
     .replace(new RegExp(`^\\s*\\[${escaped}\\]\\s*\\n?`), "")
     .replace(new RegExp(`^\\s*🖥️\\s*\\*\\*\\[${escaped}\\]\\*\\*\\s*\\n?`), "")
     .trim();
+}
+
+function parseHumanBytes(str: string): number {
+  const m = /^(\d+(?:\.\d+)?)([BKMGT])$/i.exec(str.trim());
+  if (!m) return 0;
+  const val = Number(m[1]);
+  const unit = m[2].toUpperCase();
+  const mult: Record<string, number> = {
+    B: 1,
+    K: 1024,
+    M: 1024 ** 2,
+    G: 1024 ** 3,
+    T: 1024 ** 4,
+  };
+  return val * (mult[unit] ?? 1);
+}
+
+interface ParsedNodeStatus {
+  uptime?: string;
+  load?: string;
+  memPct?: string;
+  memUsedTotal?: string;
+  memFree?: string;
+  memAvail?: string;
+  memCache?: string;
+  memShared?: string;
+  swap?: string;
+  diskPct?: string;
+  diskUsedTotal?: string;
+  netRx?: string;
+  netTx?: string;
+  proc?: string;
+  port?: string;
+  activeServices?: number;
+  failedServices: string[];
+  categoryCounts: Record<string, number>;
+  topServicesRam: Array<{ name: string; mem: string; bytes: number }>;
+  pm2Online?: string;
+  topCpu?: string;
+  topMem?: string;
+}
+
+const SHORT_CATEGORY_LABEL: Record<string, string> = {
+  "App & Web": "App",
+  "Database & Cache": "DB",
+  "Container & VM": "VM",
+  "Network & Security": "Net",
+  "Monitoring & Log": "Mon",
+  "System & Core": "Sys",
+};
+
+function parseNodeStatusText(rawText: string): ParsedNodeStatus {
+  const cleaned = rawText
+    .replace(/^```[A-Za-z0-9_+-]*\n?/, "")
+    .replace(/\n?```$/, "")
+    .trim();
+
+  const parsed: ParsedNodeStatus = {
+    failedServices: [],
+    categoryCounts: {},
+    topServicesRam: [],
+  };
+
+  let inServices = false;
+  let inPm2 = false;
+  let currentCat = "";
+  const seenServices = new Set<string>();
+
+  for (const rawLine of cleaned.split("\n")) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    let m: RegExpExecArray | null;
+
+    if ((m = /^up\s+(.+)$/.exec(trimmed))) {
+      parsed.uptime = m[1].trim();
+      continue;
+    }
+    if ((m = /^load\s+(.+)$/.exec(trimmed))) {
+      parsed.load = m[1].trim().split(/\s+/).join(" / ");
+      continue;
+    }
+    if ((m = /^mem\s+\[[^\]]+\]\s*(\d+%)\s+(\S+)/.exec(trimmed))) {
+      parsed.memPct = m[1];
+      parsed.memUsedTotal = m[2];
+      continue;
+    }
+    if ((m = /^used\s+(\S+)\s*·\s*free\s+(\S+)\s*·\s*avail\s+(\S+)/.exec(trimmed))) {
+      parsed.memFree = m[2];
+      parsed.memAvail = m[3];
+      continue;
+    }
+    if ((m = /^buff\/cache\s+(\S+)\s*·\s*shared\s+(\S+)/.exec(trimmed))) {
+      parsed.memCache = m[1];
+      parsed.memShared = m[2];
+      continue;
+    }
+    if ((m = /^swap\s+(.+)$/.exec(trimmed))) {
+      const rest = m[1].trim();
+      if (rest.includes("(off)")) {
+        parsed.swap = "off";
+      } else {
+        const sm = /\[[^\]]+\]\s*(\d+%)\s+(\S+)/.exec(rest);
+        parsed.swap = sm ? `${sm[2]} (${sm[1]})` : rest;
+      }
+      continue;
+    }
+    if ((m = /^disk\s+\[[^\]]+\]\s*(\d+%)\s+(\S+)/.exec(trimmed))) {
+      parsed.diskPct = m[1];
+      parsed.diskUsedTotal = m[2];
+      continue;
+    }
+    if ((m = /^net\s+rx\s+(\S+)\s+tx\s+(\S+)/.exec(trimmed))) {
+      parsed.netRx = m[1];
+      parsed.netTx = m[2];
+      continue;
+    }
+    if ((m = /^proc\s+(\d+)\s*·\s*port\s+(\d+)/.exec(trimmed))) {
+      parsed.proc = m[1];
+      parsed.port = m[2];
+      continue;
+    }
+    if ((m = /^services\s*\((\d+)\s+active\)/.exec(trimmed))) {
+      parsed.activeServices = Number(m[1]);
+      inServices = true;
+      inPm2 = false;
+      continue;
+    }
+    if ((m = /^pm2\s*\(([^)]+)\)/.exec(trimmed))) {
+      parsed.pm2Online = m[1].replace(/\s+online$/, "").trim();
+      inServices = false;
+      inPm2 = true;
+      continue;
+    }
+    if ((m = /^top cpu\s+(.+)$/.exec(trimmed))) {
+      parsed.topCpu = m[1].trim();
+      inServices = false;
+      inPm2 = false;
+      continue;
+    }
+    if ((m = /^top mem\s+(.+)$/.exec(trimmed))) {
+      parsed.topMem = m[1].trim();
+      inServices = false;
+      inPm2 = false;
+      continue;
+    }
+
+    if (inServices && !inPm2) {
+      if ((m = /^\[([^\]]+)\]/.exec(trimmed))) {
+        currentCat = SHORT_CATEGORY_LABEL[m[1]] || m[1];
+        continue;
+      }
+
+      // Format 2 kolom: "● nginx              46M │ ..."
+      const col2 = /^([●✕○])\s+(\S+)\s+(\S+)\s*│/.exec(trimmed);
+      if (col2) {
+        const [, icon, svcName, memOrState] = col2;
+        if (currentCat) {
+          parsed.categoryCounts[currentCat] = (parsed.categoryCounts[currentCat] ?? 0) + 1;
+        }
+        if (icon === "✕" || memOrState === "FAIL") {
+          parsed.failedServices.push(svcName);
+        }
+        const bytes = parseHumanBytes(memOrState);
+        if (bytes > 0 && !seenServices.has(svcName)) {
+          seenServices.add(svcName);
+          parsed.topServicesRam.push({ name: svcName, mem: memOrState, bytes });
+        }
+        continue;
+      }
+
+      // Format 1 kolom (kompatibilitas node lama): "nginx              ● up      46M"
+      const col1 = /^(\S+)\s+([●✕○])\s+(up|FAIL|down)\s+(\S+)$/.exec(trimmed);
+      if (col1) {
+        const [, svcName, icon, state, memStr] = col1;
+        if (currentCat) {
+          parsed.categoryCounts[currentCat] = (parsed.categoryCounts[currentCat] ?? 0) + 1;
+        }
+        if (icon === "✕" || state === "FAIL") {
+          parsed.failedServices.push(svcName);
+        }
+        const bytes = parseHumanBytes(memStr);
+        if (bytes > 0 && !seenServices.has(svcName)) {
+          seenServices.add(svcName);
+          parsed.topServicesRam.push({ name: svcName, mem: memStr, bytes });
+        }
+      }
+    }
+  }
+
+  parsed.topServicesRam.sort((a, b) => b.bytes - a.bytes);
+  return parsed;
 }
 
 export function formatFleetSummaryReport(
@@ -34,10 +222,7 @@ export function formatFleetSummaryReport(
   let usedRamMb = 0;
   let healthyCount = 0;
 
-  const tableRows: string[] = [
-    `${"NODE".padEnd(13)} ST ${"LOAD".padStart(4)} ${"RAM".padStart(7)} ${"UP".padStart(4)}`,
-    "─".repeat(34),
-  ];
+  const nodeBlocks: string[] = [];
 
   for (const n of sortedNodes) {
     const res = resultMap.get(n.nodeId);
@@ -45,63 +230,117 @@ export function formatFleetSummaryReport(
     const totMb = n.info.memory?.totalMb ?? 0;
     const freeMb = n.info.memory?.freeMb ?? 0;
     const uMb = Math.max(0, totMb - freeMb);
-    const memPct = totMb > 0 ? Math.round((uMb / totMb) * 100) : 0;
+    const memPctNum = totMb > 0 ? Math.round((uMb / totMb) * 100) : 0;
     const load1 = n.info.loadAvg?.[0] ?? 0;
-    const upH = `${Math.round((n.info.uptime ?? 0) / 3600)}h`;
 
     totalCores += cores;
     totalRamMb += totMb;
     usedRamMb += uMb;
 
-    const hasFailInStatus = res?.status === "ok" && /\bFAIL\b/.test(res.fullText);
-    const isWarn = memPct >= 90 || (cores > 0 && load1 > cores * 1.5) || hasFailInStatus;
-    const isErr = res && res.status !== "ok";
-    if (!isErr && !isWarn) healthyCount += 1;
+    const distroLabel = n.info.distro
+      ? `${n.info.distro.id.charAt(0).toUpperCase()}${n.info.distro.id.slice(1)} ${n.info.distro.version}`.trim()
+      : `${n.info.platform}/${n.info.arch}`;
+    const activeStar = n.nodeId === activeNodeId ? " ⭐" : "";
 
-    const stLabel = isErr ? "ER" : isWarn ? "WN" : "OK";
-    const uGb = Math.round(uMb / 1024);
-    const tGb = Math.max(1, Math.round(totMb / 1024));
-    const ramLabel = `${uGb}/${tGb}G`.padStart(7);
+    if (!res || res.status !== "ok") {
+      const errText = res?.error || "Data status live belum tersedia";
+      nodeBlocks.push(
+        [
+          `🔴 **${n.nodeId}**${activeStar} · \`${n.info.hostname}\` · \`${distroLabel}\` · \`${cores}c\``,
+          `└─ ❌ **Gagal mengambil status:** \`${errText}\``,
+        ].join("\n")
+      );
+      continue;
+    }
 
-    tableRows.push(
-      `${fitText(n.nodeId, 13)} ${stLabel} ${load1.toFixed(2).padStart(4)} ${ramLabel} ${upH.padStart(4)}`
+    const p = parseNodeStatusText(stripNodePrefix(n.nodeId, res.fullText));
+    const failCount = p.failedServices.length;
+    const isWarn = memPctNum >= 90 || (cores > 0 && load1 > cores * 1.5) || failCount > 0;
+    if (!isWarn) healthyCount += 1;
+
+    const statusDot = failCount > 0 ? "🔴" : isWarn ? "🟡" : "🟢";
+    const upStr = p.uptime || `${Math.round((n.info.uptime ?? 0) / 3600)}h`;
+    const loadStr =
+      p.load ||
+      (n.info.loadAvg ? n.info.loadAvg.slice(0, 3).map((v) => v.toFixed(2)).join(" / ") : "0.00");
+
+    const ramMain =
+      p.memPct && p.memUsedTotal
+        ? `\`${p.memPct}\` (\`${p.memUsedTotal}\`)`
+        : `\`${memPctNum}%\` (\`${(uMb / 1024).toFixed(1)}G/${(totMb / 1024).toFixed(1)}G\`)`;
+    const ramExtras: string[] = [];
+    if (p.memAvail) ramExtras.push(`Avail \`${p.memAvail}\``);
+    if (p.memCache) ramExtras.push(`Cache \`${p.memCache}\``);
+    if (p.swap) ramExtras.push(`Swap \`${p.swap}\``);
+
+    const diskPart =
+      p.diskPct && p.diskUsedTotal ? `\`${p.diskPct}\` (\`${p.diskUsedTotal}\`)` : "`-`";
+    const netPart = p.netRx && p.netTx ? `\`↓${p.netRx} ↑${p.netTx}\`` : "`-`";
+
+    const catOrder = ["App", "DB", "VM", "Net", "Mon", "Sys"];
+    const catSummary = catOrder
+      .filter((k) => (p.categoryCounts[k] ?? 0) > 0)
+      .map((k) => `${k} ${p.categoryCounts[k]}`)
+      .join(" · ");
+    const svcStatusPart =
+      failCount > 0
+        ? `\`${p.activeServices ?? 0} up\` · ⚠️ **${failCount} FAIL:** \`${p.failedServices.join(", ")}\``
+        : `\`${p.activeServices ?? 0} up\` · \`0 fail\``;
+    const pm2Part = p.pm2Online ? ` · PM2 \`${p.pm2Online}\`` : "";
+
+    const topSvcRamStr =
+      p.topServicesRam.length > 0
+        ? p.topServicesRam
+            .slice(0, 5)
+            .map((s) => `\`${s.name} ${s.mem}\``)
+            .join(" · ")
+        : "";
+
+    const topProcParts: string[] = [];
+    if (p.topCpu) {
+      topProcParts.push(
+        `CPU \`${p.topCpu.split(" · ").slice(0, 2).join(", ")}\``
+      );
+    }
+    if (p.topMem) {
+      topProcParts.push(
+        `RAM \`${p.topMem.split(" · ").slice(0, 2).join(", ")}\``
+      );
+    }
+
+    const cardLines: string[] = [
+      `${statusDot} **${n.nodeId}**${activeStar} · \`${n.info.hostname}\` · \`${distroLabel}\` · \`${cores}c\` · ⏱ \`${upStr}\``,
+      `├─ **CPU/Load:** \`${loadStr}\`${p.proc ? ` · **Proc:** \`${p.proc}\`` : ""}${p.port ? ` · **Port:** \`${p.port}\`` : ""}`,
+      `├─ **RAM:** ${ramMain}${ramExtras.length > 0 ? ` · ${ramExtras.join(" · ")}` : ""}`,
+      `├─ **Disk \`/\`:** ${diskPart} · **Net:** ${netPart}`,
+    ];
+
+    const hasTopSvc = topSvcRamStr !== "";
+    const hasTopProc = topProcParts.length > 0;
+
+    const svcBranch = hasTopSvc || hasTopProc ? "├─" : "└─";
+    cardLines.push(
+      `${svcBranch} **Services:** ${svcStatusPart}${catSummary ? ` (${catSummary})` : ""}${pm2Part}`
     );
+
+    if (hasTopSvc) {
+      const topSvcBranch = hasTopProc ? "├─" : "└─";
+      cardLines.push(`${topSvcBranch} **Top Service RAM:** ${topSvcRamStr}`);
+    }
+
+    if (hasTopProc) {
+      cardLines.push(`└─ **Top Process:** ${topProcParts.join(" · ")}`);
+    }
+
+    nodeBlocks.push(cardLines.join("\n"));
   }
 
   const fleetRamPct = totalRamMb > 0 ? Math.round((usedRamMb / totalRamMb) * 100) : 0;
-  const sections: string[] = [
-    `📊 **RINGKASAN STATUS FLEET (${sortedNodes.length} Node Online)**`,
-    `• Kesehatan Fleet: \`${healthyCount}/${sortedNodes.length} node normal\` · Node aktif chat: \`${activeNodeId || "(belum dipilih)"}\``,
-    `• Kapasitas Total: \`${totalCores} vCPU\` · RAM Fleet: \`${(usedRamMb / 1024).toFixed(1)}G / ${(totalRamMb / 1024).toFixed(1)}G (${fleetRamPct}%)\``,
+  return [
+    `📊 **ASTER FLEET SUMMARY** · \`${healthyCount}/${sortedNodes.length} Sehat\` · \`${totalCores} vCPU\` · \`RAM ${(usedRamMb / 1024).toFixed(1)}G/${(totalRamMb / 1024).toFixed(1)}G (${fleetRamPct}%)\``,
     "",
-    "```text",
-    ...tableRows,
-    "```",
-  ];
-
-  sortedNodes.forEach((n, idx) => {
-    const res = resultMap.get(n.nodeId);
-    const distroLabel = n.info.distro
-      ? `${n.info.distro.id} ${n.info.distro.version}`.trim()
-      : `${n.info.platform}/${n.info.arch}`;
-    const activeBadge = n.nodeId === activeNodeId ? " · **[AKTIF]**" : "";
-    const durSec = res ? `${(res.durationMs / 1000).toFixed(1)}s` : "-";
-
-    sections.push("");
-    sections.push(
-      `🖥️ **[${idx + 1}/${sortedNodes.length}] ${n.nodeId}** (\`${n.info.hostname}\` · ${distroLabel} · ${durSec})${activeBadge}`
-    );
-
-    if (!res) {
-      sections.push("```text\n(Data status live belum tersedia)\n```");
-    } else if (res.status !== "ok") {
-      sections.push(`❌ Gagal mengambil status: \`${res.error || "Unknown error"}\``);
-    } else {
-      sections.push(stripNodePrefix(n.nodeId, res.fullText));
-    }
-  });
-
-  return sections.join("\n");
+    nodeBlocks.join("\n\n"),
+  ].join("\n");
 }
 
 export function formatBroadcastReport(
@@ -116,24 +355,10 @@ export function formatBroadcastReport(
   const errCount = sorted.length - okCount;
   const totalSec = (totalDurationMs / 1000).toFixed(1);
 
-  const summaryTable: string[] = [
-    `${"NODE".padEnd(18)} ${"STATUS".padEnd(6)} ${"WAKTU".padStart(8)}`,
-    "─".repeat(34),
-    ...sorted.map((r) => {
-      const st = r.status === "ok" ? "OK" : r.status === "aborted" ? "STOP" : "ERROR";
-      const sec = `${(r.durationMs / 1000).toFixed(1)}s`;
-      return `${fitText(r.nodeId, 18)} ${st.padEnd(6)} ${sec.padStart(8)}`;
-    }),
-  ];
-
   const lines: string[] = [
-    `📡 **LAPORAN BROADCAST FLEET (${okCount}/${sorted.length} Sukses · ${totalSec}s)**`,
-    `• Instruksi: \`${prompt.replace(/`/g, "'").slice(0, 180)}\``,
-    ...(errCount > 0 ? [`• Perhatian: \`${errCount} node gagal / dihentikan\``] : []),
-    "",
-    "```text",
-    ...summaryTable,
-    "```",
+    `📡 **ASTER FLEET BROADCAST** · \`${okCount}/${sorted.length} Sukses\` · ⏱ \`${totalSec}s\``,
+    `💬 **Instruksi:** \`${prompt.replace(/`/g, "'").slice(0, 180)}\``,
+    ...(errCount > 0 ? [`⚠️ **Perhatian:** \`${errCount} node gagal / dihentikan\``] : []),
   ];
 
   sorted.forEach((r, idx) => {
@@ -146,7 +371,7 @@ export function formatBroadcastReport(
           : `❌ \`ERROR (${sec})\``;
 
     lines.push("");
-    lines.push(`🖥️ **[${idx + 1}/${sorted.length}] ${r.nodeId}** (\`${r.hostname}\` · ${r.distroName}) — ${badge}`);
+    lines.push(`🖥️ **[${idx + 1}/${sorted.length}] ${r.nodeId}** (\`${r.hostname}\` · \`${r.distroName}\`) — ${badge}`);
 
     if (r.status === "ok") {
       const cleaned = stripNodePrefix(r.nodeId, r.fullText);
@@ -154,7 +379,7 @@ export function formatBroadcastReport(
     } else if (r.status === "aborted") {
       lines.push("`(Eksekusi dihentikan oleh operator)`");
     } else {
-      lines.push(`\`\`\`text\n${r.error || "Unknown error"}\n\`\`\``);
+      lines.push(`❌ \`${r.error || "Unknown error"}\``);
     }
   });
 
@@ -177,7 +402,6 @@ export const HUB_BOT_COMMANDS = [
   { command: "use", description: "Pilih target node: /use <node>" },
   { command: "unuse", description: "Lepas pilihan target node" },
   { command: "status", description: "Dashboard kondisi server (/status [node|all])" },
-  { command: "summary", description: "Dashboard ringkasan & status live seluruh node" },
   { command: "broadcast", description: "Chat AI / shell serentak ke semua node: /broadcast <prompt>" },
   { command: "disk", description: "Cek penggunaan disk di node aktif" },
   { command: "mem", description: "Cek penggunaan memory di node aktif" },
@@ -538,10 +762,6 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const reportMd = formatFleetSummaryReport(nodes, results, current);
     await sendFormatted(ctx, reportMd, "md");
   }
-
-  bot.command("summary", async (ctx) => {
-    await runFleetSummary(ctx);
-  });
 
   bot.command("status", async (ctx) => {
     const arg = (ctx.match ?? "").trim();

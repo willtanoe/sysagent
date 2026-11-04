@@ -150,8 +150,7 @@ Untuk pemasangan permanen menggunakan `systemd` (termasuk TLS/WSS dan konfiguras
 | `/nodes` | Menampilkan daftar server node yang terhubung beserta status *load*, RAM, *uptime*, dan tombol pilih cepat |
 | `/use <node>` | Memilih server node aktif untuk sesi chat ini |
 | `/unuse` | Melepas pilihan server node aktif |
-| `/status [node\|all]` | Dashboard monospace bergaya netdata untuk node aktif (atau ringkasan seluruh *fleet* dengan `/status all`) |
-| `/summary` | Ringkasan eksekutif & dashboard status *live* seluruh server node yang sedang online sekaligus |
+| `/status [node\|all]` | Dashboard lengkap node aktif, atau ringkasan compact seluruh *fleet* di chat dengan `/status all` |
 | `/broadcast <prompt>` | Menjalankan konsultasi AI SRE atau perintah shell (`$ <cmd>`) secara serentak ke seluruh node yang terhubung |
 | `/disk` `/mem` `/ps` `/ports` | Diagnosa cepat disk, memori, proses CPU tertinggi, dan port TCP yang *listening* di node aktif |
 | `/logs <unit> [baris]` | Menampilkan *tail* log `journalctl` untuk unit `systemd` tertentu (maks 500 baris) |

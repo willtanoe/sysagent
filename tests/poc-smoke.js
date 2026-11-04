@@ -589,22 +589,24 @@ async function runTests() {
   assert.ok(updatedHookCalled, "onUpdated callback harus terpanggil saat ada commit baru");
   console.log("✓ 23. Auto-Update poller, atomic build gate, & RPC /update berfungsi dengan benar");
 
-  // 24. Parallel Fleet Summary (/summary) & Multi-Node Broadcast (/broadcast)
+  // 24. Parallel Fleet Status (/status all) & Multi-Node Broadcast (/broadcast)
   const summaryResults = await hub.broadcastRun(1001, "__builtin:status", { timeoutMs: 20_000 });
-  assert.strictEqual(summaryResults.length, 2, "Summary harus mengumpulkan status dari 2 node online");
+  assert.strictEqual(summaryResults.length, 2, "Status all harus mengumpulkan status dari 2 node online");
   assert.strictEqual(summaryResults[0].nodeId, "hongchen", "Hasil harus diurutkan alfabetis berdasarkan nodeId");
   assert.strictEqual(summaryResults[1].nodeId, "hongyun");
   const summaryReport = formatFleetSummaryReport(hub.listNodes(), summaryResults, "hongyun");
-  assert.ok(summaryReport.includes("RINGKASAN STATUS FLEET (2 Node Online)"));
-  assert.ok(summaryReport.includes("[1/2] hongchen") && summaryReport.includes("[2/2] hongyun"));
+  assert.ok(summaryReport.includes("ASTER FLEET SUMMARY"), "Harus menampilkan header ASTER FLEET SUMMARY");
+  assert.ok(summaryReport.includes("**hongchen**") && summaryReport.includes("**hongyun** ⭐"));
+  assert.ok(summaryReport.includes("├─ **CPU/Load:**") && summaryReport.includes("├─ **RAM:**"));
+  assert.ok(!summaryReport.includes("```"), "Ringkasan /status all harus berupa native chat tanpa blok terminal <pre>");
 
   const bcastResults = await hub.broadcastRun(1001, "$ echo bcast-ok");
   assert.strictEqual(bcastResults.length, 2);
   assert.ok(bcastResults.every((r) => r.status === "ok" && r.fullText.includes("bcast-ok")));
   const bcastReport = formatBroadcastReport("$ echo bcast-ok", bcastResults, 450);
-  assert.ok(bcastReport.includes("LAPORAN BROADCAST FLEET (2/2 Sukses"));
+  assert.ok(bcastReport.includes("ASTER FLEET BROADCAST"));
   assert.ok(bcastReport.includes("[1/2] hongchen") && bcastReport.includes("[2/2] hongyun"));
-  console.log("✓ 24. Parallel Fleet Summary (/summary) & Multi-Node Broadcast (/broadcast) bekerja akurat & terstruktur");
+  console.log("✓ 24. Parallel Fleet Status (/status all native chat) & Multi-Node Broadcast (/broadcast) bekerja akurat");
 
   // Cleanup
   clientHongyun.stop();
