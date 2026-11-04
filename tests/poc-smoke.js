@@ -2,6 +2,7 @@ const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
 const { HubServer, parseNodeTokens } = require("../dist/hub/server.js");
+const { formatFleetSummaryReport, formatBroadcastReport } = require("../dist/hub/bot.js");
 const { HubStore } = require("../dist/hub/store.js");
 const { NodeClient } = require("../dist/node/client.js");
 const { NodeExecutor, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
@@ -584,6 +585,23 @@ async function runTests() {
   assert.ok(updatedHookCalled, "onUpdated callback harus terpanggil saat ada commit baru");
   console.log("✓ 23. Auto-Update poller, atomic build gate, & RPC /update berfungsi dengan benar");
 
+  // 24. Parallel Fleet Summary (/summary) & Multi-Node Broadcast (/broadcast)
+  const summaryResults = await hub.broadcastRun(1001, "__builtin:status", { timeoutMs: 20_000 });
+  assert.strictEqual(summaryResults.length, 2, "Summary harus mengumpulkan status dari 2 node online");
+  assert.strictEqual(summaryResults[0].nodeId, "hongchen", "Hasil harus diurutkan alfabetis berdasarkan nodeId");
+  assert.strictEqual(summaryResults[1].nodeId, "hongyun");
+  const summaryReport = formatFleetSummaryReport(hub.listNodes(), summaryResults, "hongyun");
+  assert.ok(summaryReport.includes("RINGKASAN STATUS FLEET (2 Node Online)"));
+  assert.ok(summaryReport.includes("[1/2] hongchen") && summaryReport.includes("[2/2] hongyun"));
+
+  const bcastResults = await hub.broadcastRun(1001, "$ echo bcast-ok");
+  assert.strictEqual(bcastResults.length, 2);
+  assert.ok(bcastResults.every((r) => r.status === "ok" && r.fullText.includes("bcast-ok")));
+  const bcastReport = formatBroadcastReport("$ echo bcast-ok", bcastResults, 450);
+  assert.ok(bcastReport.includes("LAPORAN BROADCAST FLEET (2/2 Sukses"));
+  assert.ok(bcastReport.includes("[1/2] hongchen") && bcastReport.includes("[2/2] hongyun"));
+  console.log("✓ 24. Parallel Fleet Summary (/summary) & Multi-Node Broadcast (/broadcast) bekerja akurat & terstruktur");
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -593,7 +611,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 23 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & KEAMANAN LULUS!");
+  console.log("SEMUA 24 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET OPS LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

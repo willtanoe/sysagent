@@ -31,6 +31,24 @@ export interface ActiveRun {
   onDone: (fullText: string, error?: string, usage?: TokenUsage) => void;
 }
 
+export interface BroadcastNodeProgress {
+  nodeId: string;
+  hostname: string;
+  state: "running" | "approval" | "done" | "error" | "aborted";
+  durationMs: number;
+}
+
+export interface NodeBroadcastResult {
+  nodeId: string;
+  hostname: string;
+  distroName: string;
+  status: "ok" | "error" | "aborted";
+  fullText: string;
+  error?: string;
+  durationMs: number;
+  usage?: TokenUsage;
+}
+
 export interface HubServerOptions {
   host?: string;
   nodeTokens?: Record<string, string>;
@@ -432,5 +450,171 @@ export class HubServer extends EventEmitter {
     const tracked = this.approvals.get(approvalId);
     if (!tracked) return false;
     return this.sendApproval(tracked.nodeId, tracked.runId, approvalId, approved, chatId);
+  }
+
+  async broadcastRun(
+    chatId: number,
+    prompt: string,
+    opts?: {
+      nodeIds?: string[];
+      model?: string;
+      userId?: number;
+      getHistory?: (nodeId: string) => ChatHistoryItem[] | undefined;
+      timeoutMs?: number;
+      onProgress?: (progress: BroadcastNodeProgress[]) => void;
+      onApprovalReq?: (nodeId: string, approvalId: string, command: string, reason: string) => void;
+    }
+  ): Promise<NodeBroadcastResult[]> {
+    const allOnline = this.listNodes().sort((a, b) =>
+      a.nodeId.localeCompare(b.nodeId, undefined, { sensitivity: "base" })
+    );
+    const targets = opts?.nodeIds
+      ? allOnline.filter((n) => opts.nodeIds!.includes(n.nodeId))
+      : allOnline;
+
+    if (targets.length === 0) return [];
+
+    const progressMap = new Map<string, BroadcastNodeProgress>();
+    for (const n of targets) {
+      progressMap.set(n.nodeId, {
+        nodeId: n.nodeId,
+        hostname: n.info.hostname,
+        state: "running",
+        durationMs: 0,
+      });
+    }
+
+    const emitProgress = () => {
+      if (!opts?.onProgress) return;
+      opts.onProgress(Array.from(progressMap.values()));
+    };
+
+    const tasks = targets.map((node) => {
+      return new Promise<NodeBroadcastResult>((resolve) => {
+        const startedAt = Date.now();
+        const distroName = node.info.distro
+          ? `${node.info.distro.id} ${node.info.distro.version}`.trim()
+          : `${node.info.platform}/${node.info.arch}`;
+        let settled = false;
+        let runId = "";
+        let timer: NodeJS.Timeout | null = null;
+
+        const finish = (res: NodeBroadcastResult) => {
+          if (settled) return;
+          settled = true;
+          if (timer) clearTimeout(timer);
+          progressMap.set(node.nodeId, {
+            nodeId: node.nodeId,
+            hostname: node.info.hostname,
+            state: res.status === "ok" ? "done" : res.status === "aborted" ? "aborted" : "error",
+            durationMs: res.durationMs,
+          });
+          emitProgress();
+          resolve(res);
+        };
+
+        if (opts?.timeoutMs && opts.timeoutMs > 0) {
+          timer = setTimeout(() => {
+            if (runId) {
+              this.cancelRun(runId);
+              this.clearApprovalsForRun(runId);
+              this.runs.delete(runId);
+            }
+            finish({
+              nodeId: node.nodeId,
+              hostname: node.info.hostname,
+              distroName,
+              status: "error",
+              fullText: "",
+              error: `Timeout setelah ${Math.round(opts.timeoutMs! / 1000)}s`,
+              durationMs: Date.now() - startedAt,
+            });
+          }, opts.timeoutMs);
+          timer.unref?.();
+        }
+
+        try {
+          runId = this.startRun(
+            node.nodeId,
+            chatId,
+            prompt,
+            {
+              onChunk: () => {
+                const cur = progressMap.get(node.nodeId);
+                if (cur && cur.state === "approval") {
+                  cur.state = "running";
+                }
+                if (cur) cur.durationMs = Date.now() - startedAt;
+                emitProgress();
+              },
+              onApprovalReq: (approvalId, command, reason) => {
+                const cur = progressMap.get(node.nodeId);
+                if (cur) {
+                  cur.state = "approval";
+                  cur.durationMs = Date.now() - startedAt;
+                }
+                emitProgress();
+                opts?.onApprovalReq?.(node.nodeId, approvalId, command, reason);
+              },
+              onDone: (fullText, error, usage) => {
+                const durationMs = Date.now() - startedAt;
+                if (error === "ABORTED") {
+                  finish({
+                    nodeId: node.nodeId,
+                    hostname: node.info.hostname,
+                    distroName,
+                    status: "aborted",
+                    fullText,
+                    error,
+                    durationMs,
+                    usage,
+                  });
+                  return;
+                }
+                if (error) {
+                  finish({
+                    nodeId: node.nodeId,
+                    hostname: node.info.hostname,
+                    distroName,
+                    status: "error",
+                    fullText,
+                    error,
+                    durationMs,
+                    usage,
+                  });
+                  return;
+                }
+                finish({
+                  nodeId: node.nodeId,
+                  hostname: node.info.hostname,
+                  distroName,
+                  status: "ok",
+                  fullText,
+                  durationMs,
+                  usage,
+                });
+              },
+            },
+            opts?.model,
+            {
+              userId: opts?.userId,
+              history: opts?.getHistory?.(node.nodeId),
+            }
+          );
+        } catch (err: any) {
+          finish({
+            nodeId: node.nodeId,
+            hostname: node.info.hostname,
+            distroName,
+            status: "error",
+            fullText: "",
+            error: err?.message ?? String(err),
+            durationMs: Date.now() - startedAt,
+          });
+        }
+      });
+    });
+
+    return Promise.all(tasks);
   }
 }

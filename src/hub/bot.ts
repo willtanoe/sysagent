@@ -1,10 +1,165 @@
 import { Bot, Context, InlineKeyboard } from "grammy";
-import { HubServer } from "./server";
+import { BroadcastNodeProgress, ConnectedNode, HubServer, NodeBroadcastResult } from "./server";
 import { HubStore } from "./store";
 import { chunkHtml, escapeHtml, escapeRegExp, preBlock, renderMarkdown } from "../shared/format";
 import { checkAndApplyUpdate, getGitVersionInfo, scheduleSelfRestart } from "../shared/updater";
 
 const SYNTAX_UNIT = /^[A-Za-z0-9@_.:-]+$/;
+
+function fitText(text: string, width: number): string {
+  if (text.length > width) return `${text.slice(0, width - 1)}…`;
+  return text.padEnd(width);
+}
+
+function stripNodePrefix(nodeId: string, text: string): string {
+  const escaped = escapeRegExp(nodeId);
+  return text
+    .replace(new RegExp(`^\\s*\\[${escaped}\\]\\s*\\n?`), "")
+    .replace(new RegExp(`^\\s*🖥️\\s*\\*\\*\\[${escaped}\\]\\*\\*\\s*\\n?`), "")
+    .trim();
+}
+
+export function formatFleetSummaryReport(
+  nodes: ConnectedNode[],
+  results: NodeBroadcastResult[],
+  activeNodeId?: string
+): string {
+  const sortedNodes = [...nodes].sort((a, b) =>
+    a.nodeId.localeCompare(b.nodeId, undefined, { sensitivity: "base" })
+  );
+  const resultMap = new Map(results.map((r) => [r.nodeId, r]));
+
+  let totalCores = 0;
+  let totalRamMb = 0;
+  let usedRamMb = 0;
+  let healthyCount = 0;
+
+  const tableRows: string[] = [
+    `${"NODE".padEnd(13)} ST ${"LOAD".padStart(4)} ${"RAM".padStart(7)} ${"UP".padStart(4)}`,
+    "─".repeat(34),
+  ];
+
+  for (const n of sortedNodes) {
+    const res = resultMap.get(n.nodeId);
+    const cores = n.info.cpus ?? 0;
+    const totMb = n.info.memory?.totalMb ?? 0;
+    const freeMb = n.info.memory?.freeMb ?? 0;
+    const uMb = Math.max(0, totMb - freeMb);
+    const memPct = totMb > 0 ? Math.round((uMb / totMb) * 100) : 0;
+    const load1 = n.info.loadAvg?.[0] ?? 0;
+    const upH = `${Math.round((n.info.uptime ?? 0) / 3600)}h`;
+
+    totalCores += cores;
+    totalRamMb += totMb;
+    usedRamMb += uMb;
+
+    const hasFailInStatus = res?.status === "ok" && /\bFAIL\b/.test(res.fullText);
+    const isWarn = memPct >= 90 || (cores > 0 && load1 > cores * 1.5) || hasFailInStatus;
+    const isErr = res && res.status !== "ok";
+    if (!isErr && !isWarn) healthyCount += 1;
+
+    const stLabel = isErr ? "ER" : isWarn ? "WN" : "OK";
+    const uGb = Math.round(uMb / 1024);
+    const tGb = Math.max(1, Math.round(totMb / 1024));
+    const ramLabel = `${uGb}/${tGb}G`.padStart(7);
+
+    tableRows.push(
+      `${fitText(n.nodeId, 13)} ${stLabel} ${load1.toFixed(2).padStart(4)} ${ramLabel} ${upH.padStart(4)}`
+    );
+  }
+
+  const fleetRamPct = totalRamMb > 0 ? Math.round((usedRamMb / totalRamMb) * 100) : 0;
+  const sections: string[] = [
+    `📊 **RINGKASAN STATUS FLEET (${sortedNodes.length} Node Online)**`,
+    `• Kesehatan Fleet: \`${healthyCount}/${sortedNodes.length} node normal\` · Node aktif chat: \`${activeNodeId || "(belum dipilih)"}\``,
+    `• Kapasitas Total: \`${totalCores} vCPU\` · RAM Fleet: \`${(usedRamMb / 1024).toFixed(1)}G / ${(totalRamMb / 1024).toFixed(1)}G (${fleetRamPct}%)\``,
+    "",
+    "```text",
+    ...tableRows,
+    "```",
+  ];
+
+  sortedNodes.forEach((n, idx) => {
+    const res = resultMap.get(n.nodeId);
+    const distroLabel = n.info.distro
+      ? `${n.info.distro.id} ${n.info.distro.version}`.trim()
+      : `${n.info.platform}/${n.info.arch}`;
+    const activeBadge = n.nodeId === activeNodeId ? " · **[AKTIF]**" : "";
+    const durSec = res ? `${(res.durationMs / 1000).toFixed(1)}s` : "-";
+
+    sections.push("");
+    sections.push(
+      `🖥️ **[${idx + 1}/${sortedNodes.length}] ${n.nodeId}** (\`${n.info.hostname}\` · ${distroLabel} · ${durSec})${activeBadge}`
+    );
+
+    if (!res) {
+      sections.push("```text\n(Data status live belum tersedia)\n```");
+    } else if (res.status !== "ok") {
+      sections.push(`❌ Gagal mengambil status: \`${res.error || "Unknown error"}\``);
+    } else {
+      sections.push(stripNodePrefix(n.nodeId, res.fullText));
+    }
+  });
+
+  return sections.join("\n");
+}
+
+export function formatBroadcastReport(
+  prompt: string,
+  results: NodeBroadcastResult[],
+  totalDurationMs: number
+): string {
+  const sorted = [...results].sort((a, b) =>
+    a.nodeId.localeCompare(b.nodeId, undefined, { sensitivity: "base" })
+  );
+  const okCount = sorted.filter((r) => r.status === "ok").length;
+  const errCount = sorted.length - okCount;
+  const totalSec = (totalDurationMs / 1000).toFixed(1);
+
+  const summaryTable: string[] = [
+    `${"NODE".padEnd(18)} ${"STATUS".padEnd(6)} ${"WAKTU".padStart(8)}`,
+    "─".repeat(34),
+    ...sorted.map((r) => {
+      const st = r.status === "ok" ? "OK" : r.status === "aborted" ? "STOP" : "ERROR";
+      const sec = `${(r.durationMs / 1000).toFixed(1)}s`;
+      return `${fitText(r.nodeId, 18)} ${st.padEnd(6)} ${sec.padStart(8)}`;
+    }),
+  ];
+
+  const lines: string[] = [
+    `📡 **LAPORAN BROADCAST FLEET (${okCount}/${sorted.length} Sukses · ${totalSec}s)**`,
+    `• Instruksi: \`${prompt.replace(/`/g, "'").slice(0, 180)}\``,
+    ...(errCount > 0 ? [`• Perhatian: \`${errCount} node gagal / dihentikan\``] : []),
+    "",
+    "```text",
+    ...summaryTable,
+    "```",
+  ];
+
+  sorted.forEach((r, idx) => {
+    const sec = `${(r.durationMs / 1000).toFixed(1)}s`;
+    const badge =
+      r.status === "ok"
+        ? `✅ \`${sec}\``
+        : r.status === "aborted"
+          ? `⏹ \`DIHENTIKAN (${sec})\``
+          : `❌ \`ERROR (${sec})\``;
+
+    lines.push("");
+    lines.push(`🖥️ **[${idx + 1}/${sorted.length}] ${r.nodeId}** (\`${r.hostname}\` · ${r.distroName}) — ${badge}`);
+
+    if (r.status === "ok") {
+      const cleaned = stripNodePrefix(r.nodeId, r.fullText);
+      lines.push(cleaned || "`(Selesai tanpa output teks)`");
+    } else if (r.status === "aborted") {
+      lines.push("`(Eksekusi dihentikan oleh operator)`");
+    } else {
+      lines.push(`\`\`\`text\n${r.error || "Unknown error"}\n\`\`\``);
+    }
+  });
+
+  return lines.join("\n");
+}
 
 export interface BotConfig {
   token: string;
@@ -22,6 +177,8 @@ export const HUB_BOT_COMMANDS = [
   { command: "use", description: "Pilih target node: /use <node>" },
   { command: "unuse", description: "Lepas pilihan target node" },
   { command: "status", description: "Dashboard kondisi server (/status [node|all])" },
+  { command: "summary", description: "Dashboard ringkasan & status live seluruh node" },
+  { command: "broadcast", description: "Chat AI / shell serentak ke semua node: /broadcast <prompt>" },
   { command: "disk", description: "Cek penggunaan disk di node aktif" },
   { command: "mem", description: "Cek penggunaan memory di node aktif" },
   { command: "ps", description: "Proses paling boros CPU di node aktif" },
@@ -359,6 +516,33 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     await sendFormatted(ctx, "ℹ️ Target node dilepas. Gunakan <code>/use &lt;node&gt;</code> untuk memilih kembali.", "html");
   });
 
+  async function runFleetSummary(ctx: Context): Promise<void> {
+    const nodes = hub.listNodes();
+    if (nodes.length === 0) {
+      await sendFormatted(ctx, "❌ Tidak ada server node yang terhubung saat ini.", "html");
+      return;
+    }
+
+    const chatId = ctx.chat?.id ?? 0;
+    const current = hubStore.getActiveNode(chatId);
+    const waitMsg = await ctx.reply(
+      `⏳ <b>Mengumpulkan status live dari ${nodes.length} node secara paralel...</b>`,
+      { parse_mode: "HTML" }
+    );
+
+    const results = await hub.broadcastRun(chatId, "__builtin:status", {
+      timeoutMs: 25_000,
+    });
+
+    await ctx.api.deleteMessage(chatId, waitMsg.message_id).catch(() => undefined);
+    const reportMd = formatFleetSummaryReport(nodes, results, current);
+    await sendFormatted(ctx, reportMd, "md");
+  }
+
+  bot.command("summary", async (ctx) => {
+    await runFleetSummary(ctx);
+  });
+
   bot.command("status", async (ctx) => {
     const arg = (ctx.match ?? "").trim();
     const current = hubStore.getActiveNode(ctx.chat.id);
@@ -369,27 +553,117 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
         : current || (arg !== "all" && nodes.length === 1 ? nodes[0]?.nodeId : undefined);
 
     if (arg === "all" || !targetNodeId) {
-      let text = `📊 <b>Ringkasan Fleet Aster Hub</b>\n`;
-      text += `• Total node online: <b>${nodes.length}</b>\n`;
-      text += `• Node aktif chat ini: <b>${escapeHtml(current || "(belum dipilih)")}</b>\n\n`;
-
-      if (nodes.length > 0) {
-        const rows = nodes.map((n) => {
-          const load = n.info.loadAvg?.[0]?.toFixed(2) ?? "0.00";
-          const freeMb = n.info.memory?.freeMb ?? 0;
-          const totalMb = n.info.memory?.totalMb ?? 0;
-          const usedMb = Math.max(0, totalMb - freeMb);
-          const memPct = totalMb > 0 ? Math.round((usedMb / totalMb) * 100) : 0;
-          const upH = `${Math.round((n.info.uptime ?? 0) / 3600)}h`;
-          return `${n.nodeId.padEnd(12)} load ${load.padStart(5)}  ram ${String(usedMb).padStart(5)}/${totalMb}M (${String(memPct).padStart(2)}%, free ${freeMb}M)  up ${upH}`;
-        });
-        text += preBlock(rows.join("\n"));
-      }
-      await sendFormatted(ctx, text, "html");
+      await runFleetSummary(ctx);
       return;
     }
 
     await executeOnNode(ctx, targetNodeId, "__builtin:status");
+  });
+
+  bot.command("broadcast", async (ctx) => {
+    const prompt = (ctx.match ?? "").trim();
+    if (!prompt) {
+      await sendFormatted(
+        ctx,
+        `📡 <b>Panduan Perintah /broadcast</b>\n` +
+          `Menjalankan instruksi AI SRE atau perintah shell secara <b>serentak di seluruh node yang online</b>.\n\n` +
+          `• <b>AI Chat Serentak:</b>\n` +
+          `  <code>/broadcast cek penggunaan RAM tertinggi dan service yang bermasalah</code>\n` +
+          `• <b>Shell Langsung Serentak:</b>\n` +
+          `  <code>/broadcast $ uptime &amp;&amp; df -h /</code>`,
+        "html"
+      );
+      return;
+    }
+
+    const nodes = hub.listNodes();
+    if (nodes.length === 0) {
+      await sendFormatted(ctx, "❌ Tidak ada server node yang terhubung saat ini.", "html");
+      return;
+    }
+
+    const chatId = ctx.chat?.id ?? 0;
+    const userId = ctx.from?.id ?? 0;
+    const isDirectShell = prompt.startsWith("$ ");
+    const modelOverride = hubStore.getModelOverride(chatId);
+    const startedAt = Date.now();
+
+    const renderProgressHtml = (progressList: BroadcastNodeProgress[]): string => {
+      const rows = progressList.map((p) => {
+        const sec = `${(p.durationMs / 1000).toFixed(1)}s`;
+        if (p.state === "done") return `✅ <b>${escapeHtml(p.nodeId)}</b> — Selesai (${sec})`;
+        if (p.state === "approval") return `🔐 <b>${escapeHtml(p.nodeId)}</b> — Menunggu persetujuan...`;
+        if (p.state === "aborted") return `⏹ <b>${escapeHtml(p.nodeId)}</b> — Dihentikan`;
+        if (p.state === "error") return `❌ <b>${escapeHtml(p.nodeId)}</b> — Error (${sec})`;
+        return `⏳ <b>${escapeHtml(p.nodeId)}</b> — Memproses...`;
+      });
+      return (
+        `📡 <b>Broadcast ke ${nodes.length} Node</b>\n` +
+        `Instruksi: <code>${escapeHtml(prompt.slice(0, 140))}</code>\n\n` +
+        rows.join("\n")
+      );
+    };
+
+    const initialProgress: BroadcastNodeProgress[] = [...nodes]
+      .sort((a, b) => a.nodeId.localeCompare(b.nodeId, undefined, { sensitivity: "base" }))
+      .map((n) => ({
+        nodeId: n.nodeId,
+        hostname: n.info.hostname,
+        state: "running",
+        durationMs: 0,
+      }));
+
+    const boardMsg = await ctx.reply(renderProgressHtml(initialProgress), {
+      parse_mode: "HTML",
+    });
+
+    let lastEditTime = 0;
+    let boardClosed = false;
+
+    const results = await hub.broadcastRun(chatId, prompt, {
+      model: modelOverride,
+      userId,
+      getHistory: (nodeId) => (!isDirectShell ? hubStore.getHistory(chatId, nodeId) : undefined),
+      onProgress: (progressList) => {
+        if (boardClosed) return;
+        const now = Date.now();
+        if (now - lastEditTime < 1500) return;
+        lastEditTime = now;
+        void ctx.api
+          .editMessageText(chatId, boardMsg.message_id, renderProgressHtml(progressList), {
+            parse_mode: "HTML",
+          })
+          .catch(() => undefined);
+      },
+      onApprovalReq: (nodeId, approvalId, command, reason) => {
+        const kb = new InlineKeyboard()
+          .text("✅ Setujui", `ap:${approvalId}:yes`)
+          .text("❌ Tolak", `ap:${approvalId}:no`);
+
+        void ctx
+          .reply(
+            `🔐 <b>[Broadcast] Persetujuan Diperlukan di [${escapeHtml(nodeId)}]</b>\n` +
+              `Alasan: <i>${escapeHtml(reason)}</i>\n\n` +
+              `${preBlock(command, "bash")}`,
+            { parse_mode: "HTML", reply_markup: kb }
+          )
+          .catch(() => undefined);
+      },
+    });
+
+    boardClosed = true;
+    for (const res of results) {
+      if (res.usage) {
+        hubStore.addUsage(chatId, res.usage);
+      }
+      if (!isDirectShell && res.status === "ok") {
+        hubStore.remember(chatId, res.nodeId, prompt, res.fullText);
+      }
+    }
+
+    await ctx.api.deleteMessage(chatId, boardMsg.message_id).catch(() => undefined);
+    const reportMd = formatBroadcastReport(prompt, results, Date.now() - startedAt);
+    await sendFormatted(ctx, reportMd, "md");
   });
 
   bot.command("disk", async (ctx) => {
