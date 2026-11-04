@@ -92,6 +92,10 @@ export class NodeClient {
     }
   }
 
+  hasActiveRuns(): boolean {
+    return this.activeRuns.size > 0;
+  }
+
   sendAlert(key: string, severity: "warn" | "ok", html: string): boolean {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return false;
     this.send({

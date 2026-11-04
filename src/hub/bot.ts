@@ -2,6 +2,7 @@ import { Bot, Context, InlineKeyboard } from "grammy";
 import { HubServer } from "./server";
 import { HubStore } from "./store";
 import { chunkHtml, escapeHtml, escapeRegExp, preBlock, renderMarkdown } from "../shared/format";
+import { checkAndApplyUpdate, getGitVersionInfo, scheduleSelfRestart } from "../shared/updater";
 
 const SYNTAX_UNIT = /^[A-Za-z0-9@_.:-]+$/;
 
@@ -31,6 +32,7 @@ export const HUB_BOT_COMMANDS = [
   { command: "chat", description: "Konsultasi & operasi AI: /chat <prompt>" },
   { command: "ecc", description: "Katalog & workflow ECC: /ecc [skills|agents|commands|<workflow>]" },
   { command: "stop", description: "Hentikan eksekusi yang sedang berjalan" },
+  { command: "update", description: "Update kode Hub & Node dari Git: /update [all|hub|<node>|status]" },
   { command: "auditcheck", description: "Verifikasi rantai hash audit log di node" },
   { command: "model", description: "Lihat atau ganti model AI: /model [id|reset]" },
   { command: "usage", description: "Statistik pemakaian token chat ini" },
@@ -518,6 +520,81 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const target = arg || (await requireActiveNode(ctx));
     if (!target) return;
     await executeOnNode(ctx, target, "__builtin:auditcheck");
+  });
+
+  bot.command("update", async (ctx) => {
+    const arg = (ctx.match ?? "").trim().toLowerCase();
+
+    if (arg === "status" || arg === "check" || arg === "version") {
+      const hubVer = await getGitVersionInfo();
+      await sendFormatted(
+        ctx,
+        `📦 <b>Aster Hub</b>: <code>${escapeHtml(hubVer.branch)}@${escapeHtml(hubVer.shortCommit)}</code> — ${escapeHtml(hubVer.subject)}`,
+        "html"
+      );
+      for (const n of hub.listNodes()) {
+        await executeOnNode(ctx, n.nodeId, "__builtin:version");
+      }
+      return;
+    }
+
+    const updateHubSelf = async () => {
+      const statusMsg = await ctx.reply(`🔄 <b>[aster-hub]</b> Mengecek pembaruan dari git remote...`, {
+        parse_mode: "HTML",
+      });
+      const res = await checkAndApplyUpdate();
+      if (res.status === "up_to_date") {
+        await ctx.api
+          .editMessageText(
+            ctx.chat.id,
+            statusMsg.message_id,
+            `✅ <b>[aster-hub] Sudah versi terbaru</b> (<code>${escapeHtml(res.branch)}@${escapeHtml(res.toCommit)}</code>)`,
+            { parse_mode: "HTML" }
+          )
+          .catch(() => undefined);
+        return;
+      }
+      if (res.status === "failed") {
+        await ctx.api
+          .editMessageText(
+            ctx.chat.id,
+            statusMsg.message_id,
+            `❌ <b>[aster-hub] Update gagal</b>\n${preBlock(res.error || "Unknown error")}`,
+            { parse_mode: "HTML" }
+          )
+          .catch(() => undefined);
+        return;
+      }
+      await ctx.api
+        .editMessageText(
+          ctx.chat.id,
+          statusMsg.message_id,
+          `🔄 <b>[aster-hub] Update berhasil</b> (<code>${escapeHtml(res.fromCommit)}</code> → <code>${escapeHtml(res.toCommit)}</code> di <code>${escapeHtml(res.branch)}</code>)\n` +
+            (res.changes ? `${preBlock(res.changes)}\n` : "") +
+            `♻️ <i>Me-restart Aster Hub...</i>`,
+          { parse_mode: "HTML" }
+        )
+        .catch(() => undefined);
+      hubStore.flush();
+      scheduleSelfRestart(1500);
+    };
+
+    if (arg === "hub") {
+      await updateHubSelf();
+      return;
+    }
+
+    if (arg && arg !== "all") {
+      await executeOnNode(ctx, arg, "__builtin:update");
+      return;
+    }
+
+    // Default (/update atau /update all): update seluruh node yang terhubung lalu update Hub
+    const nodes = hub.listNodes();
+    for (const n of nodes) {
+      await executeOnNode(ctx, n.nodeId, "__builtin:update");
+    }
+    await updateHubSelf();
   });
 
   bot.command("model", async (ctx) => {

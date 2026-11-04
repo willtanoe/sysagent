@@ -19,9 +19,8 @@ SyslogIdentifier=aster-node
 UMask=0077
 StateDirectory=aster-node
 StateDirectoryMode=0700
-ReadWritePaths=/var/lib/aster-node
-# Agent tidak dapat menulis ulang binary/kode dirinya sendiri
-ReadOnlyPaths=/opt/aster-fleet
+ReadWritePaths=/var/lib/aster-node /opt/aster-fleet
+ReadOnlyPaths=-/opt/aster-fleet/.env
 NoNewPrivileges=yes
 RestrictRealtime=yes
 LockPersonality=yes

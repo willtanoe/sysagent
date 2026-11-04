@@ -5,6 +5,8 @@ import { NodeEngine } from "./engine";
 import { NodeClient } from "./client";
 import { NodeAlertMonitor } from "./alerts";
 import { isManagedOpenCode, ManagedOpenCodeServer } from "./opencode-server";
+import { AutoUpdateMonitor } from "../shared/updater";
+import { escapeHtml } from "../shared/format";
 
 dotenv.config();
 
@@ -55,6 +57,7 @@ const engine = new NodeEngine(nodeId, executor, {
 
 let clientRef: NodeClient | null = null;
 let managedOpenCode: ManagedOpenCodeServer | null = null;
+let autoUpdater: AutoUpdateMonitor | null = null;
 
 const alertMonitor = new NodeAlertMonitor(
   nodeId,
@@ -103,6 +106,32 @@ async function main() {
   }
 
   client.start();
+
+  if (process.env.AUTO_UPDATE !== "false") {
+    autoUpdater = new AutoUpdateMonitor({
+      label: `node:${nodeId}`,
+      intervalMs: intEnv(process.env.AUTO_UPDATE_INTERVAL_MS, 120_000),
+      branch: process.env.AUTO_UPDATE_BRANCH,
+      isBusy: () => client.hasActiveRuns(),
+      onUpdated: (res) => {
+        client.sendAlert(
+          "auto-update",
+          "ok",
+          `🔄 <b>[${escapeHtml(nodeId)}] Auto-Update Berhasil</b>\n` +
+            `Branch: <code>${escapeHtml(res.branch)}</code> (<code>${escapeHtml(res.fromCommit)}</code> → <code>${escapeHtml(res.toCommit)}</code>)\n` +
+            `<i>Me-restart node agent...</i>`
+        );
+      },
+      onError: (err) => {
+        console.warn(`[updater:${nodeId}] Gagal cek auto-update:`, err);
+      },
+      onBeforeRestart: async () => {
+        client.stop();
+        if (managedOpenCode) await managedOpenCode.stop();
+      },
+    });
+    autoUpdater.start();
+  }
 }
 
 let stopping = false;
@@ -110,6 +139,7 @@ const shutdown = (signal: string) => {
   if (stopping) return;
   stopping = true;
   console.log(`\n[stop] Signal ${signal} diterima, menghentikan node ${nodeId}...`);
+  autoUpdater?.stop();
   client.stop();
   void Promise.allSettled([managedOpenCode ? managedOpenCode.stop() : Promise.resolve()]).finally(() =>
     process.exit(0)

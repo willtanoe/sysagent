@@ -3,6 +3,8 @@ import { run } from "@grammyjs/runner";
 import { HubServer, parseNodeTokens } from "./server";
 import { createHubBot, HUB_BOT_COMMANDS } from "./bot";
 import { HubStore } from "./store";
+import { AutoUpdateMonitor } from "../shared/updater";
+import { escapeHtml } from "../shared/format";
 
 dotenv.config();
 
@@ -68,11 +70,46 @@ async function main() {
     const runner = run(bot);
     console.log(`[boot] Telegram Bot aktif dan siap melayani fleet.`);
 
+    let autoUpdater: AutoUpdateMonitor | null = null;
+    if (process.env.AUTO_UPDATE !== "false") {
+      const intervalMs = Number(process.env.AUTO_UPDATE_INTERVAL_MS) || 120_000;
+      const primaryAdmin = allowedUsers[0];
+      autoUpdater = new AutoUpdateMonitor({
+        label: "aster-hub",
+        intervalMs,
+        branch: process.env.AUTO_UPDATE_BRANCH,
+        isBusy: () => hub.hasActiveRuns(),
+        onUpdated: async (res) => {
+          if (primaryAdmin !== undefined) {
+            await bot.api
+              .sendMessage(
+                primaryAdmin,
+                `🔄 <b>[aster-hub] Auto-Update Berhasil</b>\n` +
+                  `Branch: <code>${escapeHtml(res.branch)}</code> (<code>${escapeHtml(res.fromCommit)}</code> → <code>${escapeHtml(res.toCommit)}</code>)\n` +
+                  `<i>Me-restart Aster Hub...</i>`,
+                { parse_mode: "HTML" }
+              )
+              .catch(() => undefined);
+          }
+          store.flush();
+        },
+        onError: (err) => {
+          console.warn("[updater:aster-hub] Gagal cek auto-update:", err);
+        },
+        onBeforeRestart: async () => {
+          store.flush();
+          await Promise.allSettled([runner.stop(), hub.stop()]);
+        },
+      });
+      autoUpdater.start();
+    }
+
     let stopping = false;
     const shutdown = async (sig: string) => {
       if (stopping) return;
       stopping = true;
       console.log(`\n[stop] Signal ${sig} diterima, mematikan Aster Hub...`);
+      autoUpdater?.stop();
       store.flush();
       await Promise.allSettled([runner.stop(), hub.stop()]);
       process.exit(0);
@@ -82,7 +119,22 @@ async function main() {
     process.on("SIGTERM", () => void shutdown("SIGTERM"));
   } else {
     console.log(`[boot] TELEGRAM_BOT_TOKEN tidak diset. Hub berjalan dalam mode headless WSS Coordinator.`);
+    let autoUpdater: AutoUpdateMonitor | null = null;
+    if (process.env.AUTO_UPDATE !== "false") {
+      autoUpdater = new AutoUpdateMonitor({
+        label: "aster-hub",
+        intervalMs: Number(process.env.AUTO_UPDATE_INTERVAL_MS) || 120_000,
+        branch: process.env.AUTO_UPDATE_BRANCH,
+        isBusy: () => hub.hasActiveRuns(),
+        onBeforeRestart: async () => {
+          store.flush();
+          await hub.stop();
+        },
+      });
+      autoUpdater.start();
+    }
     const shutdown = async () => {
+      autoUpdater?.stop();
       store.flush();
       await hub.stop();
       process.exit(0);

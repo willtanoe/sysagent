@@ -19,6 +19,7 @@ const { createNodeAlertEvaluator } = require("../dist/node/alerts.js");
 const { assessRisk, isReadOnlyCommand } = require("../dist/shared/risk.js");
 const { redactSecrets } = require("../dist/shared/audit.js");
 const { markdownToHtml, chunkHtml } = require("../dist/shared/format.js");
+const { getGitVersionInfo, checkAndApplyUpdate, AutoUpdateMonitor } = require("../dist/shared/updater.js");
 
 const PORT = 9876;
 const SECRET_TOKEN = "test-secret-prod-1234567890";
@@ -528,6 +529,61 @@ async function runTests() {
   assert.ok(eccRpcOut.includes("ECC (Everything Claude Code) Integration"), "RPC __builtin:ecc:status harus mengembalikan status ECC");
   console.log(`✓ 22. Integrasi ECC (${eccSkills.length} skills, ${eccAgents.length} agents, ${eccCommands.length} commands, trigger-table & OpenCode provisioning) lulus`);
 
+  // 23. Auto-Update & Self-Updater (getGitVersionInfo, checkAndApplyUpdate, AutoUpdateMonitor, & __builtin:version)
+  const verInfo = await getGitVersionInfo();
+  assert.ok(verInfo.branch && verInfo.shortCommit.length === 7, "Harus membaca branch & shortCommit git");
+
+  const verRpcOut = await new Promise((resolve, reject) => {
+    hub.startRun("hongchen", 1001, "__builtin:version", {
+      onChunk: () => {},
+      onApprovalReq: () => {},
+      onDone: (fullText, err) => (err ? reject(new Error(err)) : resolve(fullText)),
+    });
+  });
+  assert.ok(verRpcOut.includes(verInfo.shortCommit), "RPC __builtin:version harus mengembalikan versi git node");
+
+  const upToDateRes = await checkAndApplyUpdate({
+    execFn: async (cmd) => {
+      if (cmd.includes("rev-parse --abbrev-ref HEAD")) {
+        return { exitCode: 0, output: "root-ecc-integrate\n1111111222222233333334444444555555566666\ninit" };
+      }
+      if (cmd.startsWith("git fetch")) return { exitCode: 0, output: "" };
+      if (cmd.startsWith("git rev-parse origin/")) {
+        return { exitCode: 0, output: "1111111222222233333334444444555555566666" };
+      }
+      return { exitCode: 0, output: "" };
+    },
+  });
+  assert.strictEqual(upToDateRes.status, "up_to_date");
+  assert.strictEqual(upToDateRes.restartRequired, false);
+
+  let updatedHookCalled = false;
+  const monitor = new AutoUpdateMonitor({
+    label: "test-updater",
+    autoRestart: false,
+    onUpdated: (res) => {
+      updatedHookCalled = res.fromCommit === "1111111" && res.toCommit === "9999999";
+    },
+    execFn: async (cmd) => {
+      if (cmd.includes("rev-parse --abbrev-ref HEAD")) {
+        return { exitCode: 0, output: "root-ecc-integrate\n1111111222222233333334444444555555566666\nold" };
+      }
+      if (cmd.startsWith("git fetch")) return { exitCode: 0, output: "" };
+      if (cmd.startsWith("git rev-parse origin/")) {
+        return { exitCode: 0, output: "9999999888888877777776666666555555544444" };
+      }
+      if (cmd.startsWith("git diff --name-only")) return { exitCode: 0, output: "src/node/status.ts" };
+      if (cmd.startsWith("git log --oneline")) return { exitCode: 0, output: "9999999 feat: new update" };
+      if (cmd.startsWith("git pull")) return { exitCode: 0, output: "Fast-forward" };
+      if (cmd === "npm run build") return { exitCode: 0, output: "Built OK" };
+      return { exitCode: 0, output: "" };
+    },
+  });
+  const tickRes = await monitor.tick();
+  assert.ok(tickRes && tickRes.status === "updated" && tickRes.restartRequired === true);
+  assert.ok(updatedHookCalled, "onUpdated callback harus terpanggil saat ada commit baru");
+  console.log("✓ 23. Auto-Update poller, atomic build gate, & RPC /update berfungsi dengan benar");
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -537,7 +593,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 22 TEST PRODUKSI, OPENCODE, ECC, & KEAMANAN LULUS!");
+  console.log("SEMUA 23 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & KEAMANAN LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

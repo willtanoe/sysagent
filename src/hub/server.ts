@@ -329,6 +329,10 @@ export class HubServer extends EventEmitter {
     return this.nodes.get(nodeId);
   }
 
+  hasActiveRuns(): boolean {
+    return this.runs.size > 0;
+  }
+
   startRun(
     nodeId: string,
     chatId: number,

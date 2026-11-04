@@ -6,6 +6,7 @@ import { assessRisk, isReadOnlyCommand } from "../shared/risk";
 import { ChatHistoryItem, TokenUsage } from "../shared/protocol";
 import { OpenCodeRunner, OpenCodeConfig } from "./opencode";
 import { buildEccContextForPrompt, formatEccCatalogReport } from "./ecc";
+import { checkAndApplyUpdate, getGitVersionInfo, scheduleSelfRestart } from "../shared/updater";
 
 export const ABORTED = "ABORTED";
 
@@ -204,6 +205,36 @@ export class NodeEngine {
       const sub = trimmed.startsWith("__builtin:ecc:") ? trimmed.slice("__builtin:ecc:".length) : "status";
       const out = formatEccCatalogReport(this.nodeId, sub);
       onChunk(out);
+      return out;
+    }
+
+    if (trimmed === "__builtin:version") {
+      const info = await getGitVersionInfo();
+      const out = `📦 **Node [${this.nodeId}]**: \`${info.branch}@${info.shortCommit}\` — ${info.subject}`;
+      onChunk(out);
+      return out;
+    }
+
+    if (trimmed === "__builtin:update") {
+      onChunk(`[${this.nodeId}] 🔄 Mengecek pembaruan dari git remote...\n`);
+      const res = await checkAndApplyUpdate();
+      if (res.status === "up_to_date") {
+        const out = `✅ **[${this.nodeId}] Sudah versi terbaru** (\`${res.branch}@${res.toCommit}\`)`;
+        onChunk(out);
+        return out;
+      }
+      if (res.status === "failed") {
+        const out = `❌ **[${this.nodeId}] Update gagal** (\`${res.branch}\`)\n\`\`\`text\n${res.error || "Unknown error"}\n\`\`\``;
+        onChunk(out);
+        return out;
+      }
+      const out = [
+        `🔄 **[${this.nodeId}] Update berhasil** (\`${res.fromCommit}\` → \`${res.toCommit}\` di \`${res.branch}\`)`,
+        ...(res.changes ? [`\`\`\`text\n${res.changes}\n\`\`\``] : []),
+        `♻️ *Me-restart node agent...*`,
+      ].join("\n");
+      onChunk(out);
+      scheduleSelfRestart(1500);
       return out;
     }
 
