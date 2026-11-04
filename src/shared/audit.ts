@@ -54,7 +54,7 @@ function computeEntryHash(entryWithoutHash: Omit<AuditEntry, "hash">): string {
   return crypto.createHash("sha256").update(payload).digest("hex");
 }
 
-export class AuditLogger {
+export class 审计日志器 {
   private lastHash: string = "GENESIS";
   private logPath: string;
 

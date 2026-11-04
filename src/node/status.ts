@@ -1,4 +1,4 @@
-import { NodeExecutor } from "./executor";
+import { 节点执行器 } from "./executor";
 import { distro } from "./distro";
 
 const UNIT_RE = /^[A-Za-z0-9@_.:-]+\.service$/;
@@ -58,7 +58,7 @@ function serviceLine(service: ServiceState): string {
   return `  ${shorten(service.name, 18).padEnd(18)} ${icon} ${label}`;
 }
 
-async function resolveStatusUnits(executor: NodeExecutor, configuredUnits?: string[]): Promise<string[]> {
+async function resolveStatusUnits(executor: 节点执行器, configuredUnits?: string[]): Promise<string[]> {
   if (configuredUnits && configuredUnits.length > 0) {
     return configuredUnits
       .map((u) => (u.endsWith(".service") ? u : `${u}.service`))
@@ -76,7 +76,7 @@ async function resolveStatusUnits(executor: NodeExecutor, configuredUnits?: stri
     .slice(0, 8);
 }
 
-async function collectServices(executor: NodeExecutor, configuredUnits?: string[]): Promise<ServiceState[]> {
+async function collectServices(executor: 节点执行器, configuredUnits?: string[]): Promise<ServiceState[]> {
   const units = await resolveStatusUnits(executor, configuredUnits);
   if (units.length === 0) return [];
 
@@ -99,7 +99,7 @@ async function collectServices(executor: NodeExecutor, configuredUnits?: string[
     });
 }
 
-async function collectPm2(executor: NodeExecutor): Promise<ServiceState[]> {
+async function collectPm2(executor: 节点执行器): Promise<ServiceState[]> {
   const result = await executor.execRaw(
     "command -v pm2 >/dev/null 2>&1 && pm2 jlist 2>/dev/null || true",
     6_000
@@ -125,7 +125,7 @@ async function collectPm2(executor: NodeExecutor): Promise<ServiceState[]> {
 
 /** 为本节点构建 netdata 风格的 monospace 仪表盘。 */
 export async function buildNodeStatusText(
-  executor: NodeExecutor,
+  executor: 节点执行器,
   configuredUnits?: string[]
 ): Promise<string> {
   const [

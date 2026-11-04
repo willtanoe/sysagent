@@ -1,11 +1,11 @@
 const assert = require("assert");
 const fs = require("fs");
 const path = require("path");
-const { HubServer, parseNodeTokens } = require("../dist/hub/server.js");
-const { HubStore } = require("../dist/hub/store.js");
-const { NodeClient } = require("../dist/node/client.js");
-const { NodeExecutor, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
-const { NodeEngine } = require("../dist/node/engine.js");
+const { 中枢服务器, parseNodeTokens } = require("../dist/hub/server.js");
+const { 中枢存储 } = require("../dist/hub/store.js");
+const { 节点客户端 } = require("../dist/node/client.js");
+const { 节点执行器, sanitizeEnv, stripRedundantSudo } = require("../dist/node/executor.js");
+const { 节点引擎 } = require("../dist/node/engine.js");
 const { isManagedOpenCode, resolveOpenCodeBinary } = require("../dist/node/opencode-server.js");
 const { OpenCodeRunner } = require("../dist/node/opencode.js");
 const {
@@ -40,7 +40,7 @@ async function runTests() {
 
   // 1. Hub 启动（Master Token 与 Per-Node Token）
   const nodeTokens = parseNodeTokens(`hongyun:${HONGYUN_TOKEN}`);
-  const hub = new HubServer(PORT, SECRET_TOKEN, {
+  const hub = new 中枢服务器(PORT, SECRET_TOKEN, {
     host: "127.0.0.1",
     nodeTokens,
     authTimeoutMs: 1000,
@@ -49,9 +49,9 @@ async function runTests() {
   console.log("✓ 1. Hub berhasil start di port", PORT, "(mendukung master & per-node token)");
 
   // 2. token 错误的节点必须以常量时间被拒绝
-  const badExecutor = new NodeExecutor("bad-node", "/tmp/bad.jsonl");
-  const badEngine = new NodeEngine("bad-node", badExecutor);
-  const badClient = new NodeClient(
+  const badExecutor = new 节点执行器("bad-node", "/tmp/bad.jsonl");
+  const badEngine = new 节点引擎("bad-node", badExecutor);
+  const badClient = new 节点客户端(
     { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "bad-node", token: "wrong-token" },
     badEngine
   );
@@ -63,16 +63,16 @@ async function runTests() {
   console.log("✓ 2. Autentikasi token salah ditolak oleh Hub (constant-time SHA-256 verification)");
 
   // 3. Node Hongyun（使用 per-node token）与 Hongchen（使用 master token）连接
-  const execHongyun = new NodeExecutor("hongyun", auditHongyun);
-  const engineHongyun = new NodeEngine("hongyun", execHongyun);
-  const clientHongyun = new NodeClient(
+  const execHongyun = new 节点执行器("hongyun", auditHongyun);
+  const engineHongyun = new 节点引擎("hongyun", execHongyun);
+  const clientHongyun = new 节点客户端(
     { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "hongyun", token: HONGYUN_TOKEN, reconnectDelayMs: 300 },
     engineHongyun
   );
 
-  const execHongchen = new NodeExecutor("hongchen", auditHongchen);
-  const engineHongchen = new NodeEngine("hongchen", execHongchen);
-  const clientHongchen = new NodeClient(
+  const execHongchen = new 节点执行器("hongchen", auditHongchen);
+  const engineHongchen = new 节点引擎("hongchen", execHongchen);
+  const clientHongchen = new 节点客户端(
     { hubUrl: `ws://127.0.0.1:${PORT}`, nodeId: "hongchen", token: SECRET_TOKEN, reconnectDelayMs: 300 },
     engineHongchen
   );
@@ -449,14 +449,14 @@ async function runTests() {
   }
   console.log("✓ 17. Bundled OpenCode Engine (@opencode/cli binary, session & reasoning_content recovery) lulus");
 
-  // 18. HubStore 持久化与 HTML 分块
-  const store = new HubStore(statePath);
+  // 18. 中枢存储 持久化与 HTML 分块
+  const store = new 中枢存储(statePath);
   store.setActiveNode(1001, "hongyun");
   store.remember(1001, "hongyun", "cek uptime", "Server nyala 10 hari");
   store.addUsage(1001, { promptTokens: 100, completionTokens: 50 });
   store.flush();
 
-  const storeReloaded = new HubStore(statePath);
+  const storeReloaded = new 中枢存储(statePath);
   assert.strictEqual(storeReloaded.getActiveNode(1001), "hongyun");
   assert.strictEqual(storeReloaded.getHistory(1001, "hongyun").length, 2);
   assert.strictEqual(storeReloaded.getUsage(1001).promptTokens, 100);
@@ -464,7 +464,7 @@ async function runTests() {
   const htmlChunks = chunkHtml(markdownToHtml("```bash\n" + "a".repeat(5000) + "\n```"), 2000);
   assert.ok(htmlChunks.length >= 3, "Pesan panjang harus dipecah menjadi beberapa chunk");
   assert.ok(htmlChunks[0].endsWith("</code></pre>"), "Setiap chunk pre harus ditutup dengan aman");
-  console.log("✓ 18. Persistensi HubStore (mode 0600) & HTML chunking aman terverifikasi");
+  console.log("✓ 18. Persistensi 中枢存储 (mode 0600) & HTML chunking aman terverifikasi");
 
   // 19. 自动断开与重连
   clientHongyun.stop();

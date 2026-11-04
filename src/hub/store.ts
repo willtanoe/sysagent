@@ -15,7 +15,7 @@ export interface HubPersistedState {
   usage: Record<string, UsageStats>;
 }
 
-export class HubStore {
+export class 中枢存储 {
   private filePath: string;
   private state: HubPersistedState = {
     activeNodes: {},

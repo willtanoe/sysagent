@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { NodeExecutor, RequestApprovalFn, truncateForModel, isRoot } from "./executor";
+import { 节点执行器, RequestApprovalFn, truncateForModel, isRoot } from "./executor";
 import { distroContext } from "./distro";
 import { buildNodeStatusText } from "./status";
 import { assessRisk, isReadOnlyCommand } from "../shared/risk";
@@ -33,8 +33,8 @@ export interface RunContext {
   onUsage?: (usage: TokenUsage) => void;
 }
 
-export class NodeEngine {
-  private executor: NodeExecutor;
+export class 节点引擎 {
+  private executor: 节点执行器;
   private engineMode: "opencode" | "local";
   private openCode?: OpenCodeRunner;
   private openai?: OpenAI;
@@ -46,7 +46,7 @@ export class NodeEngine {
   private statusServices: string[];
   private nodeId: string;
 
-  constructor(nodeId: string, executor: NodeExecutor, opts?: EngineOptions) {
+  constructor(nodeId: string, executor: 节点执行器, opts?: EngineOptions) {
     this.nodeId = nodeId;
     this.executor = executor;
     const rawMode = (opts?.engineMode || process.env.ENGINE || "local").toLowerCase();

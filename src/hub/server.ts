@@ -31,7 +31,7 @@ export interface ActiveRun {
   onDone: (fullText: string, error?: string, usage?: TokenUsage) => void;
 }
 
-export interface HubServerOptions {
+export interface 中枢服务器Options {
   host?: string;
   nodeTokens?: Record<string, string>;
   tlsCertPath?: string;
@@ -62,7 +62,7 @@ export function parseNodeTokens(raw: string | undefined): Record<string, string>
   return map;
 }
 
-export class HubServer extends EventEmitter {
+export class 中枢服务器 extends EventEmitter {
   private port: number;
   private host: string;
   private secretToken: string;
@@ -77,7 +77,7 @@ export class HubServer extends EventEmitter {
   private runs = new Map<string, ActiveRun>();
   private approvals = new Map<string, { nodeId: string; runId: string; chatId: number }>();
 
-  constructor(port: number, secretToken: string, opts?: HubServerOptions) {
+  constructor(port: number, secretToken: string, opts?: 中枢服务器Options) {
     super();
     this.port = port;
     this.host = opts?.host || "0.0.0.0";

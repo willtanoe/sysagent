@@ -1,9 +1,9 @@
 import * as dotenv from "dotenv";
 import * as path from "path";
-import { NodeExecutor, isRoot } from "./executor";
-import { NodeEngine } from "./engine";
-import { NodeClient } from "./client";
-import { NodeAlertMonitor } from "./alerts";
+import { 节点执行器, isRoot } from "./executor";
+import { 节点引擎 } from "./engine";
+import { 节点客户端 } from "./client";
+import { 节点告警监控器 } from "./alerts";
 import { isManagedOpenCode, ManagedOpenCodeServer } from "./opencode-server";
 
 dotenv.config();
@@ -31,14 +31,14 @@ if (!hubToken) {
   process.exit(1);
 }
 
-const executor = new NodeExecutor(nodeId, auditPath, {
+const executor = new 节点执行器(nodeId, auditPath, {
   sudoPassword: process.env.SUDO_PASSWORD,
   shellTimeoutMs: intEnv(process.env.SHELL_TIMEOUT_MS, 120_000),
   packageTimeoutMs: intEnv(process.env.PACKAGE_TIMEOUT_MS, 900_000),
   maxCommandsPerMinute: intEnv(process.env.MAX_COMMANDS_PER_MINUTE, 30),
 });
 
-const engine = new NodeEngine(nodeId, executor, {
+const engine = new 节点引擎(nodeId, executor, {
   engineMode,
   model:
     engineMode === "opencode"
@@ -53,10 +53,10 @@ const engine = new NodeEngine(nodeId, executor, {
   statusServices: listEnv(process.env.STATUS_SERVICES),
 });
 
-let clientRef: NodeClient | null = null;
+let clientRef: 节点客户端 | null = null;
 let managedOpenCode: ManagedOpenCodeServer | null = null;
 
-const alertMonitor = new NodeAlertMonitor(
+const alertMonitor = new 节点告警监控器(
   nodeId,
   executor,
   (ev) => (clientRef ? clientRef.sendAlert(ev.key, ev.severity, ev.html) : false),
@@ -69,7 +69,7 @@ const alertMonitor = new NodeAlertMonitor(
   }
 );
 
-const client = new NodeClient(
+const client = new 节点客户端(
   {
     hubUrl,
     nodeId,

@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { assessRisk, Verdict } from "../shared/risk";
-import { AuditLogger, AuditVerifyResult } from "../shared/audit";
+import { 审计日志器, AuditVerifyResult } from "../shared/audit";
 
 const MAX_BUFFER = 8 * 1024 * 1024;
 const MAX_MODEL_OUTPUT = 12_000;
@@ -60,9 +60,9 @@ export function truncateForModel(output: string): string {
   return `${output.slice(0, MAX_MODEL_OUTPUT)}\n[...dipotong ${dropped} karakter]`;
 }
 
-export class NodeExecutor {
+export class 节点执行器 {
   private nodeId: string;
-  private audit: AuditLogger;
+  private audit: 审计日志器;
   private askpassPath: string | null = null;
   private shellTimeoutMs: number;
   private packageTimeoutMs: number;
@@ -71,7 +71,7 @@ export class NodeExecutor {
 
   constructor(nodeId: string, auditPath: string, opts?: ExecutorOptions) {
     this.nodeId = nodeId;
-    this.audit = new AuditLogger(auditPath);
+    this.audit = new 审计日志器(auditPath);
     this.shellTimeoutMs = Math.min(opts?.shellTimeoutMs ?? 120_000, 1_800_000);
     this.packageTimeoutMs = Math.min(opts?.packageTimeoutMs ?? 900_000, 1_800_000);
     this.maxCommandsPerMinute = opts?.maxCommandsPerMinute ?? 30;

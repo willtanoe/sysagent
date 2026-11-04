@@ -7,12 +7,12 @@ import {
   HubToNodeMsg,
   TokenUsage,
 } from "../shared/protocol";
-import { NodeEngine, ABORTED } from "./engine";
+import { 节点引擎, ABORTED } from "./engine";
 import { distro } from "./distro";
 import { isRoot } from "./executor";
-import { NodeAlertMonitor, NodeAlertConfig } from "./alerts";
+import { 节点告警监控器, NodeAlertConfig } from "./alerts";
 
-export interface NodeClientConfig {
+export interface 节点客户端Config {
   hubUrl: string;
   nodeId: string;
   token: string;
@@ -24,18 +24,18 @@ export interface NodeClientConfig {
   alerts?: NodeAlertConfig;
 }
 
-export class NodeClient {
-  private config: NodeClientConfig;
-  private engine: NodeEngine;
+export class 节点客户端 {
+  private config: 节点客户端Config;
+  private engine: 节点引擎;
   private ws: WebSocket | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
-  private alertMonitor: NodeAlertMonitor | null = null;
+  private alertMonitor: 节点告警监控器 | null = null;
   private isClosed: boolean = false;
   private pendingApprovals = new Map<string, (approved: boolean) => void>();
   private activeRuns = new Map<string, AbortController>();
 
-  constructor(config: NodeClientConfig, engine: NodeEngine, alertMonitor?: NodeAlertMonitor) {
+  constructor(config: 节点客户端Config, engine: 节点引擎, alertMonitor?: 节点告警监控器) {
     this.config = config;
     this.engine = engine;
     this.alertMonitor = alertMonitor ?? null;

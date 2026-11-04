@@ -1,8 +1,8 @@
 import * as dotenv from "dotenv";
 import { run } from "@grammyjs/runner";
-import { HubServer, parseNodeTokens } from "./server";
+import { 中枢服务器, parseNodeTokens } from "./server";
 import { createHubBot, HUB_BOT_COMMANDS } from "./bot";
-import { HubStore } from "./store";
+import { 中枢存储 } from "./store";
 
 dotenv.config();
 
@@ -30,8 +30,8 @@ if (!secretToken && Object.keys(nodeTokens).length === 0) {
 
 async function main() {
   console.log(`[boot] Memulai Aster Hub Fleet Manager...`);
-  const store = new HubStore(stateFile);
-  const hub = new HubServer(port, secretToken, {
+  const store = new 中枢存储(stateFile);
+  const hub = new 中枢服务器(port, secretToken, {
     host,
     nodeTokens,
     tlsCertPath: process.env.TLS_CERT_PATH,

@@ -1,4 +1,4 @@
-import { NodeExecutor } from "./executor";
+import { 节点执行器 } from "./executor";
 import { escapeHtml, preBlock } from "../shared/format";
 
 export interface AlertSnapshot {
@@ -118,9 +118,9 @@ export interface NodeAlertConfig {
   ignoreUnits?: string[];
 }
 
-export class NodeAlertMonitor {
+export class 节点告警监控器 {
   private nodeId: string;
-  private executor: NodeExecutor;
+  private executor: 节点执行器;
   private config: Required<NodeAlertConfig>;
   private state = new Map<string, string>();
   private evaluate: (snapshot: AlertSnapshot) => Promise<void>;
@@ -129,7 +129,7 @@ export class NodeAlertMonitor {
 
   constructor(
     nodeId: string,
-    executor: NodeExecutor,
+    executor: 节点执行器,
     onAlert: (event: NodeAlertEvent) => boolean,
     config?: NodeAlertConfig
   ) {

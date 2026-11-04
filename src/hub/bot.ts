@@ -1,6 +1,6 @@
 import { Bot, Context, InlineKeyboard } from "grammy";
-import { HubServer } from "./server";
-import { HubStore } from "./store";
+import { 中枢服务器 } from "./server";
+import { 中枢存储 } from "./store";
 import { chunkHtml, escapeHtml, escapeRegExp, preBlock, renderMarkdown } from "../shared/format";
 
 const SYNTAX_UNIT = /^[A-Za-z0-9@_.:-]+$/;
@@ -38,9 +38,9 @@ export const HUB_BOT_COMMANDS = [
   { command: "id", description: "Tampilkan Telegram User ID & Chat ID" },
 ];
 
-export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore): Bot {
+export function createHubBot(config: BotConfig, hub: 中枢服务器, store?: 中枢存储): Bot {
   const bot = new Bot(config.token);
-  const hubStore = store ?? new HubStore("./hub-state.json");
+  const hubStore = store ?? new 中枢存储("./hub-state.json");
   const allowedChats = config.allowedChats ?? [];
   const defaultModel = config.defaultModel || process.env.MODEL_NAME || process.env.OPENAI_MODEL || "ag/gemini-3.8-flash";
 
