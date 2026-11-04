@@ -884,6 +884,76 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     await sendFormatted(ctx, lines.join("\n"), "html");
   });
 
+  async function hideGroupCommandMenu(chatId: number, extraUserId?: number): Promise<void> {
+    hubStore.setGroupMenuHidden(chatId, true);
+    await bot.api
+      .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "all_private_chats" } })
+      .catch(() => undefined);
+
+    const globalScopes: Array<{ type: "default" | "all_group_chats" | "all_chat_administrators" }> = [
+      { type: "default" },
+      { type: "all_group_chats" },
+      { type: "all_chat_administrators" },
+    ];
+    for (const scope of globalScopes) {
+      await bot.api.deleteMyCommands({ scope }).catch(() => undefined);
+      await bot.api.deleteMyCommands({ scope, language_code: "en" }).catch(() => undefined);
+      await bot.api.deleteMyCommands({ scope, language_code: "id" }).catch(() => undefined);
+    }
+
+    const chatScopes: Array<{ type: "chat" | "chat_administrators"; chat_id: number }> = [
+      { type: "chat", chat_id: chatId },
+      { type: "chat_administrators", chat_id: chatId },
+    ];
+    for (const scope of chatScopes) {
+      await bot.api.deleteMyCommands({ scope }).catch(() => undefined);
+      await bot.api.setMyCommands([], { scope }).catch(() => undefined);
+    }
+
+    const userIds = new Set<number>(config.allowedUsers);
+    if (extraUserId) userIds.add(extraUserId);
+    for (const uid of userIds) {
+      const memberScope = { type: "chat_member" as const, chat_id: chatId, user_id: uid };
+      await bot.api.deleteMyCommands({ scope: memberScope }).catch(() => undefined);
+      await bot.api.setMyCommands([], { scope: memberScope }).catch(() => undefined);
+    }
+  }
+
+  async function showGroupCommandMenu(chatId: number, extraUserId?: number): Promise<void> {
+    hubStore.setGroupMenuHidden(chatId, false);
+    await bot.api
+      .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "chat", chat_id: chatId } })
+      .catch(() => undefined);
+    await bot.api
+      .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "chat_administrators", chat_id: chatId } })
+      .catch(() => undefined);
+
+    const userIds = new Set<number>(config.allowedUsers);
+    if (extraUserId) userIds.add(extraUserId);
+    for (const uid of userIds) {
+      const memberScope = { type: "chat_member" as const, chat_id: chatId, user_id: uid };
+      await bot.api.setMyCommands(HUB_BOT_COMMANDS, { scope: memberScope }).catch(() => undefined);
+    }
+  }
+
+  function buildTopicControlKeyboard(chatId: number): InlineKeyboard {
+    const lockedTopic = getEffectiveAllowedTopic(chatId);
+    const menuHidden = hubStore.isGroupMenuHidden(chatId);
+    const kb = new InlineKeyboard();
+    if (menuHidden) {
+      kb.text("📋 Tampilkan Popup / di Grup", "topic_ctl:menu_on");
+    } else {
+      kb.text("🙈 Sembunyikan Popup / di Grup", "topic_ctl:menu_off");
+    }
+    kb.row();
+    if (lockedTopic !== undefined) {
+      kb.text("🔓 Buka Kunci (Semua Topic)", "topic_ctl:unlock");
+    } else {
+      kb.text("🔒 Kunci di Topic Ini", "topic_ctl:lock_here");
+    }
+    return kb;
+  }
+
   bot.command("topic", async (ctx) => {
     if (ctx.chat.type === "private") {
       await sendFormatted(
@@ -901,8 +971,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     if (rawArg === "status") {
       const lockedTopic = getEffectiveAllowedTopic(chatId);
       const menuHidden = hubStore.isGroupMenuHidden(chatId);
-      await sendFormatted(
-        ctx,
+      await ctx.reply(
         `🧵 <b>Status Konfigurasi Topic Grup</b>\n` +
           `• Chat ID: <code>${chatId}</code>\n` +
           `• Topic Saat Ini: <code>#${currentTopic}</code>\n` +
@@ -911,66 +980,45 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
               ? `<b>Hanya Topic <code>#${lockedTopic}</code></b>`
               : `<b>Semua Topic</b> (belum dikunci)`
           }\n` +
-          `• Popup Menu <code>/</code> di Grup: <b>${menuHidden ? "Disembunyikan" : "Aktif"}</b>\n\n` +
+          `• Popup Menu <code>/</code> di Grup: <b>${menuHidden ? "Disembunyikan (agar tidak muncul di topic lain)" : "Aktif di semua topic"}</b>\n\n` +
           `<b>Perintah:</b>\n` +
-          `• <code>/topic</code> atau <code>/topic here</code> — Kunci bot hanya di topic ini\n` +
+          `• <code>/topic</code> atau <code>/topic here</code> — Kunci bot hanya di topic ini &amp; sembunyikan popup <code>/</code> di topic lain\n` +
           `• <code>/topic &lt;id_topic&gt;</code> — Kunci bot ke ID topic tertentu\n` +
           `• <code>/topic off</code> — Izinkan kembali di semua topic grup\n` +
           `• <code>/topic menu off</code> — Sembunyikan popup daftar <code>/</code> di grup\n` +
           `• <code>/topic menu on</code> — Tampilkan kembali popup daftar <code>/</code> di grup`,
-        "html"
+        { parse_mode: "HTML", reply_markup: buildTopicControlKeyboard(chatId) }
       );
       return;
     }
 
     if (rawArg === "off" || rawArg === "unlock" || rawArg === "all" || rawArg === "reset") {
       hubStore.setAllowedTopic(chatId, 0);
-      await sendFormatted(
-        ctx,
-        `🔓 <b>Kunci Topic Dibuka</b>\nBot sekarang kembali merespons perintah <code>/</code> dan mention di seluruh topic grup ini.`,
-        "html"
+      await showGroupCommandMenu(chatId, ctx.from?.id);
+      await ctx.reply(
+        `🔓 <b>Kunci Topic Dibuka</b>\nBot sekarang kembali merespons perintah <code>/</code> dan menampilkan popup menu di seluruh topic grup ini.`,
+        { parse_mode: "HTML", reply_markup: buildTopicControlKeyboard(chatId) }
       );
       return;
     }
 
     if (rawArg === "menu off" || rawArg === "hide" || rawArg === "nomenu") {
-      hubStore.setGroupMenuHidden(chatId, true);
-      await ctx.api
-        .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "all_private_chats" } })
-        .catch(() => undefined);
-      await ctx.api.deleteMyCommands({ scope: { type: "default" } }).catch(() => undefined);
-      await ctx.api.deleteMyCommands({ scope: { type: "all_group_chats" } }).catch(() => undefined);
-      await ctx.api
-        .setMyCommands([], { scope: { type: "chat", chat_id: chatId } })
-        .catch(() => undefined);
-      await ctx.api
-        .setMyCommands([], { scope: { type: "chat_administrators", chat_id: chatId } })
-        .catch(() => undefined);
-
-      await sendFormatted(
-        ctx,
+      await hideGroupCommandMenu(chatId, ctx.from?.id);
+      await ctx.reply(
         `🙈 <b>Popup Menu <code>/</code> Grup Disembunyikan</b>\n` +
-          `Daftar autocomplete <code>/</code> milik bot ini telah dihapus dari grup agar tidak memenuhi topic lain (menu <code>/</code> di chat pribadi/DM tetap aktif).\n` +
-          `Anda tetap bisa mengetik perintah seperti <code>/status</code>, <code>/hub</code>, <code>/nodes</code> secara langsung di topic yang diizinkan.\n\n` +
-          `<i>Gunakan <code>/topic menu on</code> jika ingin memunculkan kembali popup <code>/</code> di grup.</i>`,
-        "html"
+          `Daftar autocomplete <code>/</code> milik bot ini telah dihapus dari seluruh scope grup agar tidak muncul di topic lain (menu <code>/</code> di DM pribadi tetap aktif).\n\n` +
+          `💡 <i>Catatan Aplikasi Telegram: Jika popup <code>/</code> masih terlihat karena cache aplikasi Telegram, tutup &amp; buka kembali ruang chat grup ini (atau restart aplikasi Telegram).</i>`,
+        { parse_mode: "HTML", reply_markup: buildTopicControlKeyboard(chatId) }
       );
       return;
     }
 
     if (rawArg === "menu on" || rawArg === "show" || rawArg === "menu") {
-      hubStore.setGroupMenuHidden(chatId, false);
-      await ctx.api
-        .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "chat", chat_id: chatId } })
-        .catch(() => undefined);
-      await ctx.api
-        .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "chat_administrators", chat_id: chatId } })
-        .catch(() => undefined);
-
-      await sendFormatted(
-        ctx,
-        `📋 <b>Popup Menu <code>/</code> Grup Diaktifkan</b>\nDaftar autocomplete command <code>/</code> untuk bot ini kembali ditampilkan di grup.`,
-        "html"
+      await showGroupCommandMenu(chatId, ctx.from?.id);
+      await ctx.reply(
+        `📋 <b>Popup Menu <code>/</code> Grup Diaktifkan</b>\nDaftar autocomplete command <code>/</code> kembali ditampilkan di grup.\n` +
+          `<i>(Catatan: Karena keterbatasan resmi API Telegram yang mengatur popup <code>/</code> per-grup bukan per-topic, mengaktifkan menu grup akan membuat daftar <code>/</code> terlihat di semua topic, walaupun bot tetap hanya merespons di topic yang dikunci).</i>`,
+        { parse_mode: "HTML", reply_markup: buildTopicControlKeyboard(chatId) }
       );
       return;
     }
@@ -990,16 +1038,59 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
 
     hubStore.setAllowedTopic(chatId, targetTopic);
-    await sendFormatted(
-      ctx,
-      `🔒 <b>Bot Dikunci ke Topic <code>#${targetTopic}</code></b>\n` +
-        `• Bot sekarang <b>hanya merespons</b> command <code>/</code> dan pesan di topic ini.\n` +
-        `• Semua command dan pesan di topic/thread lain dalam grup ini akan diabaikan sepenuhnya.\n\n` +
-        `💡 <b>Tips:</b>\n` +
-        `• Ketik <code>/topic off</code> jika ingin membuka kembali ke semua topic.\n` +
-        `• Karena API Telegram mengatur popup autocomplete <code>/</code> di level grup (bukan per-topic), ketik <code>/topic menu off</code> jika Anda juga ingin menyembunyikan daftar popup <code>/</code> bot ini dari grup.`,
-      "html"
+    await hideGroupCommandMenu(chatId, ctx.from?.id);
+    await ctx.reply(
+      `🔒 <b>Bot Dikunci ke Topic <code>#${targetTopic}</code> &amp; Popup <code>/</code> Topic Lain Dihapus</b>\n` +
+        `• Bot sekarang <b>hanya merespons</b> command <code>/</code> dan pesan di topic <code>#${targetTopic}</code> ini.\n` +
+        `• Daftar popup autocomplete <code>/</code> level grup otomatis disembunyikan agar <b>tidak muncul di topic/thread lain</b>.\n` +
+        `• Di topic ini Anda tetap bisa langsung mengetik <code>/status</code>, <code>/hub</code>, <code>/nodes</code>, <code>/help</code>, dll.\n\n` +
+        `💡 <i>Jika popup <code>/</code> masih tampak di layar Anda karena cache aplikasi Telegram, cukup keluar-masuk grup ini atau restart aplikasi Telegram.</i>`,
+      { parse_mode: "HTML", reply_markup: buildTopicControlKeyboard(chatId) }
     );
+  });
+
+  bot.callbackQuery(/^topic_ctl:(.+)$/, async (ctx) => {
+    if (!ctx.chat || ctx.chat.type === "private") {
+      await ctx.answerCallbackQuery();
+      return;
+    }
+    const action = ctx.match[1]!;
+    const chatId = ctx.chat.id;
+    const currentTopic = getMessageTopicId(ctx) ?? 1;
+
+    if (action === "menu_off") {
+      await hideGroupCommandMenu(chatId, ctx.from?.id);
+      await ctx.answerCallbackQuery({ text: "Popup / di grup disembunyikan." });
+    } else if (action === "menu_on") {
+      await showGroupCommandMenu(chatId, ctx.from?.id);
+      await ctx.answerCallbackQuery({ text: "Popup / di grup diaktifkan." });
+    } else if (action === "unlock") {
+      hubStore.setAllowedTopic(chatId, 0);
+      await showGroupCommandMenu(chatId, ctx.from?.id);
+      await ctx.answerCallbackQuery({ text: "Kunci topic dibuka (aktif di semua topic)." });
+    } else if (action === "lock_here") {
+      hubStore.setAllowedTopic(chatId, currentTopic);
+      await hideGroupCommandMenu(chatId, ctx.from?.id);
+      await ctx.answerCallbackQuery({ text: `Dikunci ke Topic #${currentTopic}.` });
+    }
+
+    const lockedTopic = getEffectiveAllowedTopic(chatId);
+    const menuHidden = hubStore.isGroupMenuHidden(chatId);
+    await ctx
+      .editMessageText(
+        `🧵 <b>Pengaturan Topic Grup Diperbarui</b>\n` +
+          `• Topic Aktif Bot: ${
+            lockedTopic !== undefined
+              ? `<b>Hanya Topic <code>#${lockedTopic}</code></b>`
+              : `<b>Semua Topic</b>`
+          }\n` +
+          `• Popup Menu <code>/</code> di Grup: <b>${
+            menuHidden ? "Disembunyikan (tidak muncul di topic lain)" : "Aktif di semua topic"
+          }</b>\n\n` +
+          `💡 <i>Jika perubahan popup <code>/</code> belum langsung berubah di layar, keluar-masuk chat grup untuk me-refresh cache aplikasi Telegram.</i>`,
+        { parse_mode: "HTML", reply_markup: buildTopicControlKeyboard(chatId) }
+      )
+      .catch(() => undefined);
   });
 
   bot.command("nodes", async (ctx) => {
