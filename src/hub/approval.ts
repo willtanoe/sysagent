@@ -122,14 +122,6 @@ export class ApprovalBatcher {
     return `${chatId}:${userPart}:${this.normalizeCommand(command)}`;
   }
 
-  getBatch(batchId: string): ApprovalBatch | undefined {
-    return this.batchesById.get(batchId);
-  }
-
-  getActiveBatch(chatId: number, userId: number | undefined, command: string): ApprovalBatch | undefined {
-    return this.activeBatches.get(this.getBatchKey(chatId, userId, command));
-  }
-
   async onRequest(req: ApprovalRequest): Promise<{ batchId?: string; autoResolved: boolean; approved?: boolean }> {
     const cacheKey = this.getCacheKey(req.chatId, req.userId, req.command);
     const cached = this.decisionCache.get(cacheKey);
@@ -370,19 +362,6 @@ export class ApprovalBatcher {
     }
 
     return true;
-  }
-
-  clearDecisionCache(chatId?: number): void {
-    if (chatId === undefined) {
-      this.decisionCache.clear();
-      return;
-    }
-    const prefix = `${chatId}:`;
-    for (const key of this.decisionCache.keys()) {
-      if (key.startsWith(prefix)) {
-        this.decisionCache.delete(key);
-      }
-    }
   }
 
   cleanupExpired(): void {

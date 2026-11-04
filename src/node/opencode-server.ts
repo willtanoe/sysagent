@@ -80,14 +80,6 @@ export class ManagedOpenCodeServer {
     this.opts = opts ?? {};
   }
 
-  getUrl(): string {
-    return this.url;
-  }
-
-  getPassword(): string {
-    return this.password;
-  }
-
   private launch(): ChildProcess {
     const dataDir = this.opts.dataDir || path.join(process.cwd(), ".opencode-data");
     const stateDir = path.join(dataDir, "state");

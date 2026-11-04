@@ -19,7 +19,6 @@ export interface NodeInfo {
   kernel?: string;
   cpus?: number;
   diskPct?: number;
-  isRoot?: boolean;
 }
 
 export interface ChatHistoryItem {
@@ -82,19 +81,13 @@ export interface NodeAlertMsg {
   html: string;
 }
 
-export interface NodePongMsg {
-  type: "node_pong";
-  timestamp: number;
-}
-
 export type NodeToHubMsg =
   | NodeHelloMsg
   | NodeHeartbeatMsg
   | NodeRunChunkMsg
   | NodeApprovalReqMsg
   | NodeRunDoneMsg
-  | NodeAlertMsg
-  | NodePongMsg;
+  | NodeAlertMsg;
 
 // Hub -> Node
 export interface HubWelcomeMsg {
@@ -126,14 +119,8 @@ export interface HubRunCancelMsg {
   runId: string;
 }
 
-export interface HubPingMsg {
-  type: "hub_ping";
-  timestamp: number;
-}
-
 export type HubToNodeMsg =
   | HubWelcomeMsg
   | HubRunPromptMsg
   | HubApprovalResMsg
-  | HubRunCancelMsg
-  | HubPingMsg;
+  | HubRunCancelMsg;

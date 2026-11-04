@@ -4,7 +4,7 @@ import { distroContext } from "./distro";
 import { buildNodeStatusText } from "./status";
 import { assessRisk, isReadOnlyCommand } from "../shared/risk";
 import { ChatHistoryItem, TokenUsage } from "../shared/protocol";
-import { OpenCodeRunner, OpenCodeConfig } from "./opencode";
+import { OpenCodeRunner } from "./opencode";
 import { buildEccContextForPrompt, formatEccCatalogReport } from "./ecc";
 import { checkAndApplyUpdate, getGitVersionInfo, scheduleSelfRestart } from "../shared/updater";
 
@@ -15,7 +15,6 @@ const ACTION_INTENT =
 
 export interface EngineOptions {
   engineMode?: "opencode" | "local";
-  openCode?: OpenCodeConfig | OpenCodeRunner;
   apiKey?: string;
   baseURL?: string;
   model?: string;
@@ -96,11 +95,7 @@ export class NodeEngine {
     this.maxReadOnlySteps = opts?.maxReadOnlySteps ?? 6;
     this.statusServices = opts?.statusServices ?? [];
 
-    if (opts?.openCode instanceof OpenCodeRunner) {
-      this.openCode = opts.openCode;
-    } else if (opts?.openCode) {
-      this.openCode = new OpenCodeRunner(opts.openCode);
-    } else if (this.engineMode === "opencode") {
+    if (this.engineMode === "opencode") {
       this.openCode = new OpenCodeRunner({
         url: process.env.OPENCODE_URL || "",
         password: process.env.OPENCODE_PASSWORD || "",

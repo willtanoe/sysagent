@@ -1699,52 +1699,11 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     );
   });
 
-  const handleApprovalCallback = async (ctx: Context, ok: boolean, approved: boolean) => {
-    if (!ok) {
-      await ctx
-        .answerCallbackQuery({ text: "⚠️ Permintaan persetujuan sudah kedaluwarsa atau tidak valid." })
-        .catch(() => undefined);
-      return;
-    }
-    await ctx
-      .answerCallbackQuery({
-        text: approved ? "Perintah disetujui." : "Perintah ditolak.",
-      })
-      .catch(() => undefined);
-
-    const statusText = approved
-      ? "✅ <b>DISETUJUI</b> oleh operator."
-      : "❌ <b>DITOLAK</b> oleh operator.";
-    const originalText = ctx.callbackQuery?.message?.text ?? "";
-    await ctx
-      .editMessageText(`${escapeHtml(originalText)}\n\n${statusText}`, {
-        parse_mode: "HTML",
-        reply_markup: { inline_keyboard: [] },
-      })
-      .catch(() => undefined);
-  };
-
   // Callback persetujuan batch (multi-node & de-spammed): apb:<batchId>:<yes|no>
   bot.callbackQuery(/^apb:([^:]+):(yes|no)$/, async (ctx) => {
     const [, batchId, decision] = ctx.match;
     const approved = decision === "yes";
     await approvalBatcher.handleCallback(ctx, batchId!, approved);
-  });
-
-  // Callback persetujuan ringkas (<=64 byte): ap:<approvalId>:<yes|no>
-  bot.callbackQuery(/^ap:([^:]+):(yes|no)$/, async (ctx) => {
-    const [, approvalId, decision] = ctx.match;
-    const approved = decision === "yes";
-    const ok = hub.resolveApprovalById(approvalId!, approved, ctx.chat?.id, ctx.from?.id);
-    await handleApprovalCallback(ctx, ok, approved);
-  });
-
-  // Callback persetujuan legacy: appr:<nodeId>:<runId>:<approvalId>:<yes|no>
-  bot.callbackQuery(/^appr:([^:]+):([^:]+):([^:]+):(yes|no)$/, async (ctx) => {
-    const [, nodeId, runId, approvalId, decision] = ctx.match;
-    const approved = decision === "yes";
-    const ok = hub.sendApproval(nodeId!, runId!, approvalId!, approved, ctx.chat?.id, ctx.from?.id);
-    await handleApprovalCallback(ctx, ok, approved);
   });
 
   // Handler pesan teks biasa / mention di grup

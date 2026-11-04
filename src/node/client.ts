@@ -9,7 +9,6 @@ import {
 } from "../shared/protocol";
 import { NodeEngine, ABORTED } from "./engine";
 import { distro } from "./distro";
-import { isRoot } from "./executor";
 import { NodeAlertMonitor, NodeAlertConfig } from "./alerts";
 
 export interface NodeClientConfig {
@@ -57,7 +56,6 @@ export class NodeClient {
       distro,
       kernel: os.release(),
       cpus: os.cpus().length,
-      isRoot,
     };
   }
 
@@ -203,11 +201,6 @@ export class NodeClient {
         controller.abort();
         this.activeRuns.delete(msg.runId);
       }
-      return;
-    }
-
-    if (msg.type === "hub_ping") {
-      this.send({ type: "node_pong", timestamp: Date.now() });
       return;
     }
 

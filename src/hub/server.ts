@@ -571,25 +571,6 @@ export class HubServer extends EventEmitter {
     return this.sendApproval(tracked.nodeId, tracked.runId, approvalId, approved, chatId, userId);
   }
 
-  getPendingApprovals(chatId?: number): Array<{
-    approvalId: string;
-    nodeId: string;
-    runId: string;
-    chatId: number;
-    userId?: number;
-    command?: string;
-    reason?: string;
-    createdAt?: number;
-  }> {
-    const list = [];
-    for (const [approvalId, meta] of this.approvals.entries()) {
-      if (chatId === undefined || meta.chatId === chatId) {
-        list.push({ approvalId, ...meta });
-      }
-    }
-    return list;
-  }
-
   async broadcastRun(
     chatId: number,
     prompt: string,
