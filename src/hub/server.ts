@@ -40,7 +40,7 @@ export interface HubServerOptions {
   maxPayloadBytes?: number;
 }
 
-/** Perbandingan token constant-time menggunakan SHA-256 digest agar aman dari timing attack. */
+/** 使用 SHA-256 摘要进行常量时间 token 比较，以防止时序攻击。 */
 export function verifySecretToken(provided: string, expected: string): boolean {
   if (!provided || !expected) return false;
   const hashA = crypto.createHash("sha256").update(provided).digest();
@@ -48,7 +48,7 @@ export function verifySecretToken(provided: string, expected: string): boolean {
   return crypto.timingSafeEqual(hashA, hashB);
 }
 
-/** Parse string "hongyun:tok1,hongchen:tok2" menjadi map token per-node. */
+/** 将字符串 "hongyun:tok1,hongchen:tok2" 解析为按节点分组的 token 映射。 */
 export function parseNodeTokens(raw: string | undefined): Record<string, string> {
   const map: Record<string, string> = {};
   if (!raw) return map;
@@ -133,7 +133,7 @@ export class HubServer extends EventEmitter {
         wss.on("connection", (ws: WebSocket) => {
           let authenticatedNodeId: string | null = null;
 
-          // Timeout jika koneksi baru tidak mengirim node_hello dalam batas waktu
+          // 若新连接在时限内未发送 node_hello 则超时
           const authTimer = setTimeout(() => {
             if (!authenticatedNodeId && ws.readyState === WebSocket.OPEN) {
               ws.close(4001, "Authentication timeout");
@@ -170,13 +170,13 @@ export class HubServer extends EventEmitter {
                   return;
                 }
 
-                // Tutup koneksi lama jika node yang sama reconnect sebelum socket lama timeout
+                // 若相同节点在旧 socket 超时前重连，则关闭旧连接
                 const existing = this.nodes.get(msg.nodeId);
                 if (existing && existing.ws !== ws) {
                   try {
                     existing.ws.close();
                   } catch {
-                    // abaikan
+                    // 忽略
                   }
                 }
 
@@ -296,7 +296,7 @@ export class HubServer extends EventEmitter {
         try {
           node.ws.close();
         } catch {
-          // abaikan
+          // 忽略
         }
       }
       this.nodes.clear();

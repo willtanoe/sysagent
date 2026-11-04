@@ -44,7 +44,7 @@ export function isRhelFamily(): boolean {
   return RHEL_FAMILY.includes(distro.id);
 }
 
-/** Konteks distro untuk system prompt agar model tidak menebak package manager. */
+/** 为系统 prompt 提供 distro 上下文，避免模型猜测包管理器。 */
 export function distroContext(): string {
   const selinux = isRhelFamily()
     ? " SELinux aktif secara default: cek pakai getenforce; jangan mematikannya tanpa diminta."

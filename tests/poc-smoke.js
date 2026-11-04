@@ -38,7 +38,7 @@ async function runTests() {
   fs.rmSync(auditHongchen, { force: true });
   fs.rmSync(statePath, { force: true });
 
-  // 1. Hub Start dengan Master Token & Per-Node Token
+  // 1. Hub 启动（Master Token 与 Per-Node Token）
   const nodeTokens = parseNodeTokens(`hongyun:${HONGYUN_TOKEN}`);
   const hub = new HubServer(PORT, SECRET_TOKEN, {
     host: "127.0.0.1",
@@ -48,7 +48,7 @@ async function runTests() {
   await hub.start();
   console.log("✓ 1. Hub berhasil start di port", PORT, "(mendukung master & per-node token)");
 
-  // 2. Node dengan token salah harus ditolak secara constant-time
+  // 2. token 错误的节点必须以常量时间被拒绝
   const badExecutor = new NodeExecutor("bad-node", "/tmp/bad.jsonl");
   const badEngine = new NodeEngine("bad-node", badExecutor);
   const badClient = new NodeClient(
@@ -62,7 +62,7 @@ async function runTests() {
   fs.rmSync("/tmp/bad.jsonl", { force: true });
   console.log("✓ 2. Autentikasi token salah ditolak oleh Hub (constant-time SHA-256 verification)");
 
-  // 3. Node Hongyun (pakai per-node token) & Hongchen (pakai master token) Konek
+  // 3. Node Hongyun（使用 per-node token）与 Hongchen（使用 master token）连接
   const execHongyun = new NodeExecutor("hongyun", auditHongyun);
   const engineHongyun = new NodeEngine("hongyun", execHongyun);
   const clientHongyun = new NodeClient(
@@ -87,7 +87,7 @@ async function runTests() {
   assert.deepStrictEqual(nodeIds, ["hongchen", "hongyun"]);
   console.log("✓ 3. Node 'hongyun' (per-node token) dan 'hongchen' (master token) terdaftar:", nodeIds.join(", "));
 
-  // 4. Metadata & Distro Detection
+  // 4. 元数据与 Distro 检测
   const nodeHy = hub.getNode("hongyun");
   const nodeHc = hub.getNode("hongchen");
   assert.ok(nodeHy && nodeHy.info.hostname && nodeHy.info.distro, "Metadata & distro hongyun lengkap");
@@ -96,7 +96,7 @@ async function runTests() {
     `✓ 4. Metadata fleet & distro: host=${nodeHy.info.hostname}, distro=${nodeHy.info.distro.name} (${nodeHy.info.distro.packageManager})`
   );
 
-  // 5. Eksekusi perintah aman di Hongyun ($ uptime)
+  // 5. 在 Hongyun 执行安全命令 ($ uptime)
   let hongyunChunks = "";
   let hongyunDone = false;
   hub.startRun("hongyun", 1001, "$ uptime", {
@@ -117,7 +117,7 @@ async function runTests() {
   assert.ok(hongyunChunks.length > 0, "Harus menerima streaming chunks");
   console.log("✓ 5. Eksekusi terisolasi di node 'hongyun' sukses");
 
-  // 6. Eksekusi perintah aman di Hongchen ($ whoami)
+  // 6. 在 Hongchen 执行安全命令 ($ whoami)
   let hongchenDone = false;
   hub.startRun("hongchen", 1001, "$ whoami", {
     onChunk: () => {},
@@ -134,7 +134,7 @@ async function runTests() {
   assert.ok(hongchenDone, "Run di hongchen harus selesai");
   console.log("✓ 6. Eksekusi terisolasi di node 'hongchen' sukses");
 
-  // 7. Audit logging lokal independen, permission 0600, & verifikasi rantai hash
+  // 7. 独立的本地审计日志、0600 权限与哈希链验证
   assert.ok(fs.existsSync(auditHongyun), "audit hongyun harus ada");
   assert.ok(fs.existsSync(auditHongchen), "audit hongchen harus ada");
   const modeHy = fs.statSync(auditHongyun).mode & 0o777;
@@ -144,7 +144,7 @@ async function runTests() {
   assert.strictEqual(verifyHy.total, 1);
   console.log("✓ 7. Audit log per-node independen, mode 0600, & hash-chain terverifikasi");
 
-  // 8. Command Berisiko di Hongyun: Tolak oleh Operator via Hub
+  // 8. Hongyun 的风险命令：由 Operator 通过 Hub 拒绝
   let approvalReqReceived = false;
   hub.startRun("hongyun", 1001, "$ systemctl restart nginx", {
     onChunk: () => {},
@@ -162,7 +162,7 @@ async function runTests() {
   assert.ok(approvalReqReceived, "Approval request harus sampai ke Hub");
   console.log("✓ 8. Approval bridge: penolakan operator berhasil diteruskan ke node");
 
-  // 9. Command Berisiko di Hongyun: Setujui oleh Operator via Hub (validasi callback <=64 byte & isolasi chatId)
+  // 9. Hongyun 的风险命令：由 Operator 通过 Hub 批准（回调 <=64 字节与 chatId 隔离验证）
   let approvalApprovedReceived = false;
   hub.startRun("hongyun", 1001, "$ cp /etc/hostname /tmp/aster-hostname-test", {
     onChunk: () => {},
@@ -187,7 +187,7 @@ async function runTests() {
   fs.rmSync("/tmp/aster-hostname-test", { force: true });
   console.log("✓ 9. Approval bridge: persetujuan operator berhasil dieksekusi di node");
 
-  // 10. Command Bahaya & Akses File Rahasia (Block list)
+  // 10. 危险命令与敏感文件访问（Block list）
   let blockRunDone = false;
   hub.startRun("hongchen", 1001, "$ rm -rf /", {
     onChunk: () => {},
@@ -228,7 +228,7 @@ async function runTests() {
   assert.strictEqual(isReadOnlyCommand("echo hi > /tmp/x"), false);
   console.log("✓ 10. Risk classifier memblokir perintah destruktif, pembacaan secret (termasuk level root), & env leak");
 
-  // 11. Sanitasi Environment Child Process (Anti Secret Leak)
+  // 11. 子进程环境清洗（防 Secret 泄露）
   process.env.TEST_SECRET_TOKEN = "rahasia-negara-123";
   const sanitized = sanitizeEnv(process.env);
   assert.strictEqual(sanitized.TEST_SECRET_TOKEN, undefined, "Variabel SECRET/TOKEN harus dihapus dari child env");
@@ -237,7 +237,7 @@ async function runTests() {
   delete process.env.TEST_SECRET_TOKEN;
   console.log("✓ 11. Sanitasi environment child process mencegah kebocoran token/password");
 
-  // 12. Redaksi Secret di Audit Log & Deteksi Tampering via /auditcheck
+  // 12. 审计日志中的 Secret 脱敏与通过 /auditcheck 的篡改检测
   const redacted = redactSecrets("curl -H 'Authorization: Bearer my-secret-jwt' --password supersecret api_key=12345");
   assert.ok(!redacted.includes("my-secret-jwt") && !redacted.includes("supersecret") && !redacted.includes("12345"));
 
@@ -253,7 +253,7 @@ async function runTests() {
   assert.ok(auditCheckOut.includes("utuh"), "Audit chain harus terverifikasi utuh lewat RPC");
   console.log("✓ 12. Redaksi secret audit & RPC /auditcheck berfungsi dengan benar");
 
-  // 13. Built-in Status Dashboard (__builtin:status)
+  // 13. 内置状态仪表盘 (__builtin:status)
   const statusOut = await new Promise((resolve, reject) => {
     hub.startRun("hongyun", 1001, "__builtin:status", {
       onChunk: () => {},
@@ -264,7 +264,7 @@ async function runTests() {
   assert.ok(statusOut.includes("load") && statusOut.includes("mem") && statusOut.includes("disk"));
   console.log("✓ 13. Dashboard monospace /status berhasil dibangun dari node");
 
-  // 14. Pembatalan Tugas (/stop -> hub_cancel -> kill process tree)
+  // 14. 任务取消 (/stop -> hub_cancel -> kill process tree)
   let cancelErr = "";
   hub.startRun("hongchen", 2002, "$ sleep 30", {
     onChunk: () => {},
@@ -280,7 +280,7 @@ async function runTests() {
   assert.strictEqual(cancelErr, "ABORTED", "Run yang dibatalkan harus berstatus ABORTED");
   console.log("✓ 14. Pembatalan /stop (hub_cancel) menghentikan proses shell di node secara instan");
 
-  // 15. Proactive Alert Forwarding dari Node ke Hub
+  // 15. 从 Node 到 Hub 的主动告警转发
   let receivedAlertHtml = "";
   hub.once("node_alert", (nodeId, key, severity, html) => {
     if (nodeId === "hongyun" && key === "disk" && severity === "warn") {
@@ -310,7 +310,7 @@ async function runTests() {
   assert.ok(receivedAlertHtml.includes("95%"), "Hub harus menerima alert proaktif disk dari node");
   console.log("✓ 15. Evaluator & forwarding alert proaktif dari Node ke Hub bekerja akurat");
 
-  // 16. AI Tool-Calling Loop (Engine Local) dengan Stubbed OpenAI Client
+  // 16. AI 工具调用循环（本地 Engine，Stubbed OpenAI Client）
   let callTurn = 0;
   engineHongchen.setClientForTest({
     chat: {
@@ -371,7 +371,7 @@ async function runTests() {
   assert.strictEqual(aiUsage.promptTokens, 120);
   console.log("✓ 16. Loop AI tool-calling (engine=local) & pelacakan token usage bekerja sempurna");
 
-  // 17. Bundled OpenCode Engine (@opencode/cli resolution, session management, recovery, & permission bridge)
+  // 17. 内置 OpenCode 引擎（@opencode/cli 解析、会话管理、恢复与权限桥接）
   assert.strictEqual(isManagedOpenCode("opencode", ""), true);
   assert.strictEqual(isManagedOpenCode("opencode", "http://127.0.0.1:4199"), false);
   assert.strictEqual(isManagedOpenCode("local", ""), false);
@@ -449,7 +449,7 @@ async function runTests() {
   }
   console.log("✓ 17. Bundled OpenCode Engine (@opencode/cli binary, session & reasoning_content recovery) lulus");
 
-  // 18. HubStore Persistence & HTML Chunking
+  // 18. HubStore 持久化与 HTML 分块
   const store = new HubStore(statePath);
   store.setActiveNode(1001, "hongyun");
   store.remember(1001, "hongyun", "cek uptime", "Server nyala 10 hari");
@@ -466,7 +466,7 @@ async function runTests() {
   assert.ok(htmlChunks[0].endsWith("</code></pre>"), "Setiap chunk pre harus ditutup dengan aman");
   console.log("✓ 18. Persistensi HubStore (mode 0600) & HTML chunking aman terverifikasi");
 
-  // 19. Disconnect & Reconnect Otomatis
+  // 19. 自动断开与重连
   clientHongyun.stop();
   await sleep(350);
   assert.strictEqual(hub.listNodes().length, 1, "Tersisa 1 node setelah hongyun disconnect");
@@ -478,13 +478,13 @@ async function runTests() {
   assert.strictEqual(hub.listNodes().length, 2, "2 node kembali online setelah reconnect");
   console.log("✓ 20. Reconnect otomatis node sukses");
 
-  // 21. Deteksi Kerusakan Rantai Audit (Tamper Detection)
+  // 21. 审计链损坏检测（Tamper Detection）
   fs.appendFileSync(auditHongyun, '{"ts":"2026-01-01","nodeId":"hongyun","command":"hack","prevHash":" SALAH","hash":"123"}\n');
   const tamperedVerify = execHongyun.verifyAudit();
   assert.strictEqual(tamperedVerify.ok, false, "Audit verifier harus mendeteksi baris yang dimanipulasi");
   console.log("✓ 21. Tamper-detection mendeteksi manipulasi file audit pada baris ke-" + tamperedVerify.brokenAt);
 
-  // 22. Integrasi ECC (Everything Claude Code): Skills, Agents, Commands, Trigger-Table, OpenCode Provisioning, & RPC
+  // 22. ECC (Everything Claude Code) 集成：Skills、Agents、Commands、Trigger-Table、OpenCode Provisioning 与 RPC
   const eccSkills = listEccSkills();
   const eccAgents = listEccAgents();
   const eccCommands = listEccCommands();
@@ -523,7 +523,7 @@ async function runTests() {
   assert.ok(eccRpcOut.includes("ECC (Everything Claude Code) Integration"), "RPC __builtin:ecc:status harus mengembalikan status ECC");
   console.log(`✓ 22. Integrasi ECC (${eccSkills.length} skills, ${eccAgents.length} agents, ${eccCommands.length} commands, trigger-table & OpenCode provisioning) lulus`);
 
-  // Cleanup
+  // 清理
   clientHongyun.stop();
   clientHongchen.stop();
   await hub.stop();

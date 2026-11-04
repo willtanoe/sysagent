@@ -25,7 +25,7 @@ export interface AuditVerifyResult {
   reason?: string;
 }
 
-/** Redaksi pola password, token, atau secret sensitif agar tidak bocor di audit trail plaintext. */
+/** 对密码、token 或敏感 secret 的模式进行脱敏，避免泄露到明文审计追踪中。 */
 export function redactSecrets(text: string): string {
   if (!text) return text;
   return text
@@ -75,7 +75,7 @@ export class AuditLogger {
       try {
         fs.chmodSync(this.logPath, 0o600);
       } catch {
-        // abaikan jika filesystem tidak mendukung chmod
+        // 若文件系统不支持 chmod 则忽略
       }
       const lines = fs.readFileSync(this.logPath, "utf8").trim().split("\n");
       for (let i = lines.length - 1; i >= 0; i--) {
@@ -88,11 +88,11 @@ export class AuditLogger {
             break;
           }
         } catch {
-          // lewati baris rusak saat inisialisasi
+          // 初始化时跳过损坏行
         }
       }
     } catch {
-      // file belum ada atau tidak dapat diakses
+      // 文件不存在或无法访问
     }
   }
 
@@ -108,7 +108,7 @@ export class AuditLogger {
     chatId?: number;
     userId?: number;
   }): AuditEntry {
-    // Sinkronkan ulang lastHash dari disk bila ada proses lain yang menulis
+    // 若有其他进程写入，则从磁盘重新同步 lastHash
     this.init();
 
     const ts = new Date().toISOString();
@@ -139,7 +139,7 @@ export class AuditLogger {
       try {
         fs.chmodSync(this.logPath, 0o600);
       } catch {
-        // abaikan
+        // 忽略
       }
     } catch (err: any) {
       console.error(`[audit:${data.nodeId}] Gagal menulis audit log:`, err.message);

@@ -71,7 +71,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
   }
 
-  // Forward alert proaktif dari node ke admin utama
+  // 将节点的主动告警转发给主管理员
   const primaryAdmin = config.allowedUsers[0];
   if (primaryAdmin !== undefined) {
     hub.on("node_alert", (_nodeId: string, _key: string, _severity: string, html: string) => {
@@ -105,7 +105,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     }
   }
 
-  // Middleware Otorisasi
+  // 授权中间件
   bot.use(async (ctx, next) => {
     if (!isAuthorized(ctx)) {
       if (ctx.callbackQuery) {
@@ -118,7 +118,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     await next();
   });
 
-  // Helper eksekusi prompt/command ke node tertentu
+  // 将 prompt/command 执行到指定节点的辅助函数
   async function executeOnNode(
     ctx: Context,
     nodeId: string,
@@ -159,7 +159,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           { parse_mode: "HTML" }
         );
       } catch {
-        // abaikan rate limit / unchanged text
+        // 忽略速率限制/未变更文本
       }
     };
 
@@ -201,7 +201,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
             try {
               await ctx.api.deleteMessage(chatId, initialMsg.message_id);
             } catch {
-              // jika gagal dihapus, akan ditimpa atau dikirim pesan baru
+              // 若删除失败，将被覆盖或发送新消息
             }
 
             if (error === "ABORTED") {
@@ -574,7 +574,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
           onDone: () => {},
         });
       } catch {
-        // abaikan jika node sedang sibuk/offline
+        // 若节点忙/离线则忽略
       }
     }
     await sendFormatted(
@@ -626,7 +626,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       .catch(() => undefined);
   };
 
-  // Callback persetujuan ringkas (<=64 byte): ap:<approvalId>:<yes|no>
+  // 简短审批回调 (<=64 字节)：ap:<approvalId>:<yes|no>
   bot.callbackQuery(/^ap:([^:]+):(yes|no)$/, async (ctx) => {
     const [, approvalId, decision] = ctx.match;
     const approved = decision === "yes";
@@ -634,7 +634,7 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     await handleApprovalCallback(ctx, ok, approved);
   });
 
-  // Callback persetujuan legacy: appr:<nodeId>:<runId>:<approvalId>:<yes|no>
+  // 旧版审批回调：appr:<nodeId>:<runId>:<approvalId>:<yes|no>
   bot.callbackQuery(/^appr:([^:]+):([^:]+):([^:]+):(yes|no)$/, async (ctx) => {
     const [, nodeId, runId, approvalId, decision] = ctx.match;
     const approved = decision === "yes";
@@ -642,12 +642,12 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     await handleApprovalCallback(ctx, ok, approved);
   });
 
-  // Handler pesan teks biasa / mention di grup
+  // 普通文本消息/群组 mention 处理器
   bot.on("message:text", async (ctx) => {
     let prompt = ctx.message.text.trim();
     if (prompt.startsWith("/")) return;
 
-    // Jika di grup dan botName diset, dukung mention @botName
+    // 若在群组且设置了 botName，支持 @botName mention
     if (ctx.chat.type !== "private" && config.botName) {
       const mention = `@${config.botName}`.toLowerCase();
       if (!prompt.toLowerCase().includes(mention) && !prompt.startsWith("$ ")) {

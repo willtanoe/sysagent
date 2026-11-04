@@ -72,7 +72,7 @@ export class HubStore {
       try {
         fs.chmodSync(tmp, 0o600);
       } catch {
-        // abaikan
+        // 忽略
       }
       fs.renameSync(tmp, this.filePath);
     } catch (err: any) {

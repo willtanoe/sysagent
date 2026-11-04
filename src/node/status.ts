@@ -123,7 +123,7 @@ async function collectPm2(executor: NodeExecutor): Promise<ServiceState[]> {
   }
 }
 
-/** Bangun dashboard monospace gaya netdata untuk node ini. */
+/** 为本节点构建 netdata 风格的 monospace 仪表盘。 */
 export async function buildNodeStatusText(
   executor: NodeExecutor,
   configuredUnits?: string[]

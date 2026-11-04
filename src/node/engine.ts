@@ -95,7 +95,7 @@ export class NodeEngine {
     }
   }
 
-  /** Set endpoint OpenCode setelah ManagedOpenCodeServer selesai start. */
+  /** 在 ManagedOpenCodeServer 启动完成后设置 OpenCode endpoint。 */
   setOpenCodeEndpoint(url: string, password: string): void {
     if (!this.openCode) {
       this.openCode = new OpenCodeRunner({
@@ -112,7 +112,7 @@ export class NodeEngine {
     return this.openCode;
   }
 
-  /** Test helper untuk menyuntikkan mock OpenAI client pada unit test. */
+  /** 用于单元测试注入 mock OpenAI client 的测试辅助函数。 */
   setClientForTest(mockClient: unknown): void {
     this.openai = mockClient as OpenAI;
   }
@@ -157,7 +157,7 @@ export class NodeEngine {
       throw new Error(ABORTED);
     }
 
-    // 1. Built-in RPC Commands dari Hub
+    // 1. 来自 Hub 的内置 RPC 命令
     if (trimmed === "__builtin:status") {
       const statusText = await buildNodeStatusText(this.executor, this.statusServices);
       const out = `\`\`\`text\n${statusText}\n\`\`\``;
@@ -207,7 +207,7 @@ export class NodeEngine {
       return out;
     }
 
-    // 2. Direct Ops Mode ($ <perintah>)
+    // 2. 直接操作模式 ($ <命令>)
     if (trimmed.startsWith("$ ")) {
       const cmd = trimmed.slice(2).trim();
       onChunk(`[${this.nodeId}] ⚙️ \`${cmd}\`...\n`);
@@ -223,7 +223,7 @@ export class NodeEngine {
 
     const eccEnhancement = buildEccContextForPrompt(trimmed);
 
-    // 3. Engine OpenCode (Bundled / External `opencode serve`)
+    // 3. OpenCode 引擎（内置 / 外部 `opencode serve`）
     if (this.engineMode === "opencode" && this.openCode) {
       const chatId = ctx?.chatId ?? 0;
       const userId = ctx?.userId;
@@ -259,12 +259,12 @@ export class NodeEngine {
             return false;
           }
 
-          // Auto-approve pembacaan file non-rahasia via tool read OpenCode
+          // 通过 OpenCode 的 read 工具自动批准读取非敏感文件
           if (isRead) {
             return true;
           }
 
-          // Auto-approve untuk command shell read-only yang aman
+          // 自动批准安全的只读 shell 命令
           if (isShell && (verdict.level === "allow" || (verdict.level === "approve" && isReadOnlyCommand(command)))) {
             this.executor.logAudit({
               command,
@@ -298,7 +298,7 @@ export class NodeEngine {
       });
     }
 
-    // 4. Fallback ke Direct Shell jika mode local tapi tidak ada LLM key
+    // 4. 若为本地模式但无 LLM key，则回退到直接 Shell
     if (!this.openai) {
       onChunk(`[${this.nodeId}] ⚙️ \`${trimmed}\`...\n`);
       const res = await this.executor.runCommand(trimmed, requestApproval, undefined, signal, {
@@ -311,7 +311,7 @@ export class NodeEngine {
       return `[${this.nodeId}]\n${out}`;
     }
 
-    // 5. AI SRE Agent Mode (Local OpenAI-compatible Endpoint)
+    // 5. AI SRE Agent 模式（本地 OpenAI 兼容端点）
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       {
         role: "system",

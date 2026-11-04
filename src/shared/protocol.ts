@@ -32,7 +32,7 @@ export interface TokenUsage {
   completionTokens: number;
 }
 
-// Node -> Hub
+// 节点 -> 中枢
 export interface NodeHelloMsg {
   type: "node_hello";
   nodeId: string;
@@ -96,7 +96,7 @@ export type NodeToHubMsg =
   | NodeAlertMsg
   | NodePongMsg;
 
-// Hub -> Node
+// 中枢 -> 节点
 export interface HubWelcomeMsg {
   type: "hub_welcome";
   success: boolean;

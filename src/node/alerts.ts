@@ -30,9 +30,9 @@ export interface AlertEvaluatorDeps {
 const RECOVERY_MARGIN = 3;
 
 /**
- * Evaluator alert proaktif per-node:
- * - Hanya mengirim alert saat kondisi memburuk (bucket 5% naik atau ada unit gagal baru).
- * - Mengirim 1 notifikasi pulih saat turun di bawah threshold - 3% atau semua unit kembali sehat.
+ * 每节点主动告警评估器：
+ * - 仅在状况恶化时发送告警（5% bucket 上升或出现新的失败单元）。
+ * - 当降至阈值 - 3% 以下或所有单元恢复健康时，发送 1 条恢复通知。
  */
 export function createNodeAlertEvaluator(
   deps: AlertEvaluatorDeps

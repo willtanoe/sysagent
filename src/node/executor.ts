@@ -13,7 +13,7 @@ const REDUNDANT_ROOT_SUDO = /(^|[\n;&|(]\s*)sudo(?:\s+-[AnEHKPSv]+)*(?=\s+(?![-]
 
 export const isRoot: boolean = typeof process.getuid === "function" && process.getuid() === 0;
 
-/** Hapus prefix sudo yang tidak mengubah target user (-u/-g) ketika proses sudah berjalan sebagai root (uid=0). */
+/** 当进程已以 root (uid=0) 运行时，移除不改变目标用户 (-u/-g) 的 sudo 前缀。 */
 export function stripRedundantSudo(command: string): string {
   return command.replace(REDUNDANT_ROOT_SUDO, "$1");
 }
@@ -42,7 +42,7 @@ function singleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** Hapus variabel sensitif dari env yang diteruskan ke child process shell. */
+/** 从传递给子进程 shell 的 env 中移除敏感变量。 */
 export function sanitizeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = { ...source };
   const sensitive =
@@ -122,7 +122,7 @@ export class NodeExecutor {
     return PACKAGE_COMMAND.test(command) ? this.packageTimeoutMs : this.shellTimeoutMs;
   }
 
-  /** Eksekusi shell mentah dengan process-group kill & sanitasi env (dipakai internal & oleh runCommand). */
+  /** 原始 shell 执行，支持 process-group kill 与 env 清洗（内部与 runCommand 共用）。 */
   execRaw(command: string, timeoutMs?: number, signal?: AbortSignal): Promise<ExecResult> {
     const effectiveTimeout = timeoutMs ?? this.timeoutFor(command);
     const prepared = this.prepareCommand(command);
@@ -196,7 +196,7 @@ export class NodeExecutor {
           try {
             child.kill("SIGKILL");
           } catch {
-            // sudah berhenti
+            // 已停止
           }
         }
       };
@@ -309,7 +309,7 @@ export class NodeExecutor {
       }
     }
 
-    // Rate limiting per menit
+    // 每分钟速率限制
     const now = Date.now();
     while (this.executionTimestamps.length > 0 && now - (this.executionTimestamps[0] ?? 0) > 60_000) {
       this.executionTimestamps.shift();
