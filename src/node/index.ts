@@ -33,6 +33,21 @@ if (!hubToken) {
   process.exit(1);
 }
 
+try {
+  const hubEndpoint = new URL(hubUrl);
+  if (
+    hubEndpoint.protocol === "ws:" &&
+    !["127.0.0.1", "::1", "localhost"].includes(hubEndpoint.hostname)
+  ) {
+    console.warn(
+      `[warn] HUB_URL memakai ws:// non-loopback (${hubEndpoint.hostname}) — token & output perintah terkirim plaintext.\n` +
+        `       Gunakan wss:// (TLS), atau pastikan jalur ini terenkripsi (WireGuard/Tailscale/VPN internal).`
+    );
+  }
+} catch {
+  // URL tidak valid — biarkan NodeClient yang menampilkan error koneksinya
+}
+
 // Referensi client diisi setelah konstruksi; dipakai untuk forward entri audit ke Hub (off-node copy).
 let clientRef: NodeClient | null = null;
 

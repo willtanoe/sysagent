@@ -292,6 +292,14 @@ export class ApprovalBatcher {
       return false;
     }
 
+    // Callback harus berasal dari chat tempat pesan approval berada (defense-in-depth).
+    if (ctx.chat?.id !== undefined && ctx.chat.id !== batch.chatId) {
+      await ctx.answerCallbackQuery({
+        text: "⚠️ Persetujuan ini bukan untuk chat ini.",
+      }).catch(() => undefined);
+      return false;
+    }
+
     const callerId = ctx.from?.id;
     if (batch.userId !== undefined && callerId !== undefined && callerId !== batch.userId) {
       await ctx.answerCallbackQuery({

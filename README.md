@@ -88,7 +88,7 @@ Sistem manajemen **Server & VPS Multi-Node (SRE Agent Fleet)** berbasis Telegram
 ├── deploy/systemd/            # Unit systemd produksi (Full-Root & Isolated)
 ├── docs/                      # Dokumentasi lengkap arsitektur, deploy, keamanan, & operasi
 ├── tests/
-│   └── poc-smoke.js           # 32 skenario pengujian otomatis end-to-end, OpenCode, ECC, fleet, approval, & keamanan
+│   └── poc-smoke.js           # 34 skenario pengujian otomatis end-to-end, OpenCode, ECC, fleet, approval, & keamanan
 ├── .env.example               # Template konfigurasi Hub & Node
 ├── .npmrc                     # Konfigurasi npm (omit=optional) untuk instalasi lintas platform
 └── package.json
@@ -118,7 +118,7 @@ npm run build
 ```bash
 npm test
 ```
-Menjalankan 32 skenario pengujian tanpa ketergantungan jaringan luar:
+Menjalankan 34 skenario pengujian tanpa ketergantungan jaringan luar:
 - **Keamanan & audit**: autentikasi token master & per-node, *approval gate*, pemblokiran perintah destruktif, sanitasi *environment*, redaksi *secret* audit, deteksi manipulasi rantai hash (`/auditcheck`).
 - **Eksekusi & fleet**: eksekusi multi-node terisolasi, pembatalan proses (`/stop`), *proactive alert*, `/status all`, `/broadcast`, *embedded Hub node* beserta `fleet-ctl`, *auto-reconnect*.
 - **Engine AI**: integrasi binary bundled `@opencode/cli` (`OpenCodeRunner` + pemulihan `reasoning_content`), **ECC (Everything Claude Code)** (`listEccSkills`, `buildEccContextForPrompt`, `provisionOpenCodeEcc`, RPC `__builtin:ecc`), serta injeksi provider Gateway dari `.env`.

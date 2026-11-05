@@ -997,6 +997,120 @@ async function runTests() {
     console.log("✓ 32. Arsip audit off-node di Hub (forwarding, verifikasi hash, deteksi gap & invalid) lulus");
   }
 
+  // 33. Throttle auth failure per (IP, nodeId) — ban sementara & pemulihan
+  {
+    const hubBan = new HubServer(9879, "ban-token-xyz", {
+      host: "127.0.0.1",
+      authBanThreshold: 3,
+      authBanMs: 600,
+    });
+    await hubBan.start();
+
+    const attempt = (nodeId, token) =>
+      new Promise((res) => {
+        const ws = new WebSocket("ws://127.0.0.1:9879");
+        let outcome = "";
+        ws.on("message", (raw) => {
+          const m = JSON.parse(raw.toString());
+          if (m.type === "hub_welcome" && m.success) outcome = "ok";
+        });
+        ws.on("close", (code) => res({ ws, outcome, code }));
+        ws.on("open", () => {
+          ws.send(
+            JSON.stringify({
+              type: "node_hello",
+              nodeId,
+              token,
+              info: { hostname: "ban-host", platform: "linux", arch: "x64", uptime: 1, loadAvg: [0, 0, 0], memory: { totalMb: 1, freeMb: 1 } },
+            })
+          );
+        });
+        setTimeout(() => {
+          try { ws.close(); } catch {}
+          res({ ws, outcome, code: -1 });
+        }, 700);
+      });
+
+    for (let i = 0; i < 3; i++) {
+      const r = await attempt("ban-node", "token-salah");
+      try { r.ws.close(); } catch {}
+    }
+
+    const banned = await attempt("ban-node", "ban-token-xyz");
+    assert.notStrictEqual(banned.outcome, "ok", "Koneksi dalam masa ban harus ditolak walau token benar");
+
+    await sleep(700);
+    const recovered = await attempt("ban-node", "ban-token-xyz");
+    assert.strictEqual(recovered.outcome, "ok", "Setelah ban kedaluwarsa, token benar harus diterima");
+    try { recovered.ws.close(); } catch {}
+
+    await hubBan.stop();
+    console.log("✓ 33. Throttle auth failure per (IP, nodeId) — ban sementara & pemulihan lulus");
+  }
+
+  // 34. Idle watchdog run di Hub + cap teks progress
+  {
+    const hubIdle = new HubServer(9880, "idle-token-xyz", { host: "127.0.0.1", runIdleTimeoutMs: 400 });
+    await hubIdle.start();
+
+    const wsNode = new WebSocket("ws://127.0.0.1:9880");
+    await new Promise((res) => wsNode.on("open", res));
+    const welcomed = new Promise((res) =>
+      wsNode.on("message", (raw) => {
+        const m = JSON.parse(raw.toString());
+        if (m.type === "hub_welcome") res(m);
+      })
+    );
+    wsNode.send(
+      JSON.stringify({
+        type: "node_hello",
+        nodeId: "idle-node",
+        token: "idle-token-xyz",
+        info: { hostname: "idle-host", platform: "linux", arch: "x64", uptime: 1, loadAvg: [0, 0, 0], memory: { totalMb: 1, freeMb: 1 } },
+      })
+    );
+    await welcomed;
+
+    const idleDone = new Promise((res) => {
+      hubIdle.startRun("idle-node", 555, "$ sleep 999", {
+        onChunk: () => {},
+        onApprovalReq: () => {},
+        onDone: (_fullText, error) => res({ error }),
+      });
+    });
+    const idleRes = await idleDone;
+    assert.ok(idleRes.error && idleRes.error.includes("idle timeout"), "Run diam harus diakhiri watchdog idle");
+
+    const aliveRunId = hubIdle.startRun("idle-node", 556, "$ long task", {
+      onChunk: () => {},
+      onApprovalReq: () => {},
+      onDone: () => {},
+    });
+    const keepAlive = setInterval(() => {
+      wsNode.send(JSON.stringify({ type: "node_chunk", runId: aliveRunId, chunk: "x" }));
+    }, 120);
+    await sleep(900);
+    assert.ok(hubIdle.hasActiveRuns(), "Run dengan aktivitas berkala harus tetap hidup melewati ambang idle");
+    clearInterval(keepAlive);
+    await sleep(700);
+    assert.strictEqual(hubIdle.hasActiveRuns(), false, "Run yang diam setelah aktivitas harus dibersihkan watchdog");
+
+    const progress = new RunProgress({
+      nodeId: "x",
+      prompt: "$ cmd",
+      editIntervalMs: 100,
+      sendTyping: async () => {},
+      editStatus: async () => {},
+    });
+    progress.onChunk("a".repeat(50_000));
+    progress.onChunk("b".repeat(50_000));
+    assert.ok(progress.snapshot().textTail.length <= 64_000, "Teks progress harus ter-cap di 64KB");
+
+    wsNode.close();
+    await hubIdle.stop();
+    console.log("✓ 34. Idle watchdog run di Hub & cap teks progress lulus");
+  }
+
   // Cleanup
   clientHongyun.stop();
   clientHongchen.stop();
@@ -1006,7 +1120,7 @@ async function runTests() {
   fs.rmSync(statePath, { force: true });
 
   console.log("\n==============================================================");
-  console.log("SEMUA 32 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
+  console.log("SEMUA 34 TEST PRODUKSI, OPENCODE, ECC, AUTO-UPDATE, & FLEET HUB LULUS!");
   console.log("==============================================================");
   process.exit(0);
 }

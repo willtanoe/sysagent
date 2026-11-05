@@ -31,6 +31,7 @@ export interface ActiveRun {
   chatId: number;
   userId?: number;
   startedAt: number;
+  lastActivityAt: number;
   onChunk: (chunk: string) => void;
   onApprovalReq: (approvalId: string, command: string, reason: string) => void;
   onDone: (fullText: string, error?: string, usage?: TokenUsage) => void;
@@ -65,6 +66,12 @@ export interface HubServerOptions {
   approvalTimeoutMs?: number;
   /** Direktori arsip audit off-node per node. Kosong = forwarding audit dinonaktifkan. */
   centralAuditDir?: string;
+  /** Jumlah handshake gagal per (IP, nodeId) sebelum ban sementara. Default 10. */
+  authBanThreshold?: number;
+  /** Durasi ban auth (ms). Default 60s. */
+  authBanMs?: number;
+  /** Run tanpa aktivitas (chunk/approval) selama durasi ini diakhiri paksa. 0 = nonaktif. Default 15 menit. */
+  runIdleTimeoutMs?: number;
 }
 
 /** Perbandingan token constant-time menggunakan SHA-256 digest agar aman dari timing attack. */
@@ -103,7 +110,11 @@ export class HubServer extends EventEmitter {
   private centralAudits = new Map<string, AuditLogger>();
   private centralExpected = new Map<string, string>();
   private auditAlertCooldowns = new Map<string, number>();
-  private approvalCleanupTimer: NodeJS.Timeout | null = null;
+  private authBanThreshold: number;
+  private authBanMs: number;
+  private runIdleTimeoutMs: number;
+  private authFailures = new Map<string, { count: number; bannedUntil: number }>();
+  private maintenanceTimer: NodeJS.Timeout | null = null;
   private httpServer: http.Server | null = null;
   private httpsServer: https.Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -127,6 +138,9 @@ export class HubServer extends EventEmitter {
     this.maxPayloadBytes = opts?.maxPayloadBytes ?? 2 * 1024 * 1024;
     this.approvalTimeoutMs = opts?.approvalTimeoutMs ?? 300_000;
     this.centralAuditDir = opts?.centralAuditDir;
+    this.authBanThreshold = opts?.authBanThreshold ?? 10;
+    this.authBanMs = opts?.authBanMs ?? 60_000;
+    this.runIdleTimeoutMs = opts?.runIdleTimeoutMs ?? 900_000;
   }
 
   getLoopbackConfig(): { url: string; cookie: string } {
@@ -140,6 +154,52 @@ export class HubServer extends EventEmitter {
   private isLoopbackAddress(addr: string | undefined): boolean {
     if (!addr) return false;
     return addr === "127.0.0.1" || addr === "::1" || addr === "::ffff:127.0.0.1";
+  }
+
+  /** Ban auth dikunci per pasangan (IP sumber, nodeId) agar node legitimate di belakang NAT yang sama tidak ikut terkena. */
+  private authFailureKey(ip: string, nodeId: string): string {
+    return `${ip}|${nodeId}`;
+  }
+
+  private recordAuthFailure(ip: string, nodeId: string): void {
+    // Cegah pertumbuhan map tanpa batas dari spam nodeId acak.
+    if (this.authFailures.size > 5_000) {
+      const now = Date.now();
+      for (const [key, entry] of this.authFailures.entries()) {
+        if (now > entry.bannedUntil) this.authFailures.delete(key);
+      }
+      if (this.authFailures.size > 5_000) this.authFailures.clear();
+    }
+
+    const key = this.authFailureKey(ip, nodeId);
+    const entry = this.authFailures.get(key) ?? { count: 0, bannedUntil: 0 };
+    if (entry.bannedUntil !== 0 && Date.now() > entry.bannedUntil) {
+      entry.count = 0;
+    }
+    entry.count += 1;
+    if (entry.count >= this.authBanThreshold) {
+      entry.bannedUntil = Date.now() + this.authBanMs;
+      entry.count = 0;
+      console.warn(
+        `[hub] Auth ban ${Math.round(this.authBanMs / 1000)}s untuk node "${nodeId}" dari ${ip} (${this.authBanThreshold}x handshake gagal)`
+      );
+    }
+    this.authFailures.set(key, entry);
+  }
+
+  private isAuthBanned(ip: string, nodeId: string): boolean {
+    const key = this.authFailureKey(ip, nodeId);
+    const entry = this.authFailures.get(key);
+    if (!entry) return false;
+    if (entry.bannedUntil !== 0 && Date.now() > entry.bannedUntil) {
+      this.authFailures.delete(key);
+      return false;
+    }
+    return entry.bannedUntil !== 0;
+  }
+
+  private clearAuthFailures(ip: string, nodeId: string): void {
+    this.authFailures.delete(this.authFailureKey(ip, nodeId));
   }
 
   private handleInternalHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
@@ -261,12 +321,17 @@ export class HubServer extends EventEmitter {
 
         this.wss = wss;
 
-        // GC periodik: permintaan approval yang kedaluwarsa dihapus dari memori.
-        this.approvalCleanupTimer = setInterval(() => this.cleanupExpiredApprovals(), 30_000);
-        this.approvalCleanupTimer.unref?.();
+        // Maintenance periodik: GC approval kedaluwarsa + watchdog run yang diam tanpa aktivitas.
+        const sweepInterval =
+          this.runIdleTimeoutMs > 0
+            ? Math.min(30_000, Math.max(250, Math.floor(this.runIdleTimeoutMs / 4)))
+            : 30_000;
+        this.maintenanceTimer = setInterval(() => this.sweepMaintenance(), sweepInterval);
+        this.maintenanceTimer.unref?.();
 
-        wss.on("connection", (ws: WebSocket) => {
+        wss.on("connection", (ws: WebSocket, req: http.IncomingMessage) => {
           let authenticatedNodeId: string | null = null;
+          const remoteIp = req.socket.remoteAddress || "unknown";
 
           // Timeout jika koneksi baru tidak mengirim node_hello dalam batas waktu
           const authTimer = setTimeout(() => {
@@ -283,7 +348,13 @@ export class HubServer extends EventEmitter {
               if (msg.type === "node_hello") {
                 clearTimeout(authTimer);
 
+                if (this.isAuthBanned(remoteIp, String(msg.nodeId || ""))) {
+                  ws.close(4003, "Too many failed authentication attempts");
+                  return;
+                }
+
                 if (!msg.nodeId || !NODE_ID_RE.test(msg.nodeId)) {
+                  this.recordAuthFailure(remoteIp, String(msg.nodeId || "invalid"));
                   const rejectMsg: HubToNodeMsg = {
                     type: "hub_welcome",
                     success: false,
@@ -295,6 +366,7 @@ export class HubServer extends EventEmitter {
                 }
 
                 if (!this.isValidTokenForNode(msg.nodeId, msg.token)) {
+                  this.recordAuthFailure(remoteIp, msg.nodeId);
                   const rejectMsg: HubToNodeMsg = {
                     type: "hub_welcome",
                     success: false,
@@ -304,6 +376,8 @@ export class HubServer extends EventEmitter {
                   ws.close();
                   return;
                 }
+
+                this.clearAuthFailures(remoteIp, msg.nodeId);
 
                 // Tutup koneksi lama jika node yang sama reconnect sebelum socket lama timeout
                 const existing = this.nodes.get(msg.nodeId);
@@ -358,13 +432,17 @@ export class HubServer extends EventEmitter {
 
               if (msg.type === "node_chunk") {
                 const run = this.runs.get(msg.runId);
-                if (run) run.onChunk(msg.chunk);
+                if (run) {
+                  run.lastActivityAt = Date.now();
+                  run.onChunk(msg.chunk);
+                }
                 return;
               }
 
               if (msg.type === "node_approval_req") {
                 const run = this.runs.get(msg.runId);
                 if (run && run.nodeId === authenticatedNodeId) {
+                  run.lastActivityAt = Date.now();
                   this.approvals.set(msg.approvalId, {
                     nodeId: authenticatedNodeId,
                     runId: msg.runId,
@@ -436,9 +514,9 @@ export class HubServer extends EventEmitter {
 
   stop(): Promise<void> {
     return new Promise((resolve) => {
-      if (this.approvalCleanupTimer) {
-        clearInterval(this.approvalCleanupTimer);
-        this.approvalCleanupTimer = null;
+      if (this.maintenanceTimer) {
+        clearInterval(this.maintenanceTimer);
+        this.maintenanceTimer = null;
       }
       for (const [, node] of this.nodes) {
         try {
@@ -508,6 +586,7 @@ export class HubServer extends EventEmitter {
       chatId,
       userId: opts?.userId,
       startedAt: Date.now(),
+      lastActivityAt: Date.now(),
       ...handlers,
     });
 
@@ -566,6 +645,39 @@ export class HubServer extends EventEmitter {
       if (meta.createdAt !== undefined && now - meta.createdAt > this.approvalTimeoutMs) {
         this.approvals.delete(approvalId);
       }
+    }
+  }
+
+  /** Sweep periodik: GC approval kedaluwarsa + akhiri run yang diam tanpa aktivitas melewati ambang. */
+  private sweepMaintenance(): void {
+    this.cleanupExpiredApprovals();
+    if (this.runIdleTimeoutMs <= 0) return;
+
+    const now = Date.now();
+    for (const [runId, run] of this.runs.entries()) {
+      if (now - run.lastActivityAt <= this.runIdleTimeoutMs) continue;
+      this.runs.delete(runId);
+      this.clearApprovalsForRun(runId);
+
+      const node = this.nodes.get(run.nodeId);
+      if (node && node.ws.readyState === WebSocket.OPEN) {
+        const cancelMsg: HubToNodeMsg = { type: "hub_cancel", runId };
+        try {
+          node.ws.send(JSON.stringify(cancelMsg));
+        } catch {
+          // abaikan
+        }
+      }
+
+      console.warn(
+        `[hub] Run ${runId} di node "${run.nodeId}" dihentikan: idle > ${Math.round(this.runIdleTimeoutMs / 1000)}s`
+      );
+      Promise.resolve(
+        run.onDone(
+          "",
+          `Run idle timeout: tidak ada aktivitas selama ${Math.round(this.runIdleTimeoutMs / 1000)}s — run dihentikan oleh Hub.`
+        )
+      ).catch(() => undefined);
     }
   }
 

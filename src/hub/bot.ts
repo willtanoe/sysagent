@@ -612,10 +612,13 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
   // Forward alert proaktif dari node ke admin utama
   const primaryAdmin = config.allowedUsers[0];
+  // Strip anchor HTML dari alert node: node kompromian tidak bisa menyuntik link phishing ke DM admin.
+  const stripAnchors = (html: string): string =>
+    html.replace(/<a\b[^>]*>[\s\S]*?<\/a\s*>/gi, "").replace(/<a\b[^>]*\/?>/gi, "");
   if (primaryAdmin !== undefined) {
     hub.on("node_alert", (_nodeId: string, _key: string, _severity: string, html: string) => {
       void bot.api
-        .sendMessage(primaryAdmin, html, {
+        .sendMessage(primaryAdmin, stripAnchors(html), {
           parse_mode: "HTML",
           link_preview_options: { is_disabled: true },
         })

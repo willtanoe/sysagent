@@ -71,8 +71,22 @@ async function main() {
     approvalTimeoutMs: intEnv(process.env.APPROVAL_TIMEOUT_MS, 300_000),
     // Arsip audit off-node per node (verifikasi hash & deteksi gap dilakukan Hub).
     centralAuditDir: path.join(path.dirname(path.resolve(stateFile)), "audit-central"),
+    // Throttle handshake gagal per (IP, nodeId) + watchdog run tanpa aktivitas.
+    authBanThreshold: intEnv(process.env.HUB_AUTH_BAN_THRESHOLD, 10),
+    authBanMs: intEnv(process.env.HUB_AUTH_BAN_MS, 60_000),
+    runIdleTimeoutMs:
+      process.env.HUB_RUN_IDLE_TIMEOUT_MS === "0" ? 0 : intEnv(process.env.HUB_RUN_IDLE_TIMEOUT_MS, 900_000),
   });
   await hub.start();
+
+  const hubHasTls = Boolean(process.env.TLS_CERT_PATH && process.env.TLS_KEY_PATH);
+  const hubExternallyBound = ["", "0.0.0.0", "::", "::/0", "*"].includes(host.trim());
+  if (!hubHasTls && hubExternallyBound) {
+    console.warn(
+      `[warn] Hub berjalan TANPA TLS pada ${host}:${port} (bind eksternal) — token node & seluruh output perintah terkirim plaintext.\n` +
+        `       Konfigurasikan TLS_CERT_PATH/TLS_KEY_PATH, atau letakkan reverse proxy WSS di depan Hub.`
+    );
+  }
 
   let hubManagedOpenCode: ManagedOpenCodeServer | null = null;
   let hubNodeClient: NodeClient | null = null;

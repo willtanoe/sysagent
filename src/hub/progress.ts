@@ -19,6 +19,8 @@ export interface ProgressSnapshot {
 
 const SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const TOOL_LINE_RE = /(?:^|\n)(⚙️|🌐|🚫)\s*(?:\*\*\[BLOCKED\]\*\*[^`]*)?`([^`\n]+)`/g;
+/** Batas teks progres di memori: chunk besar (mis. jawaban AI panjang) hanya menyimpan tail. */
+const MAX_PROGRESS_TEXT = 64_000;
 
 export function formatElapsed(ms: number): string {
   const sec = Math.max(0, Math.floor(ms / 1000));
@@ -133,6 +135,9 @@ export class RunProgress {
 
   onChunk(chunk: string): void {
     this.text += chunk;
+    if (this.text.length > MAX_PROGRESS_TEXT) {
+      this.text = this.text.slice(-MAX_PROGRESS_TEXT);
+    }
     this.approvalPending = false;
     this.lastChunkHadTool = /(?:^|\n)(?:⚙️|🌐)\s*`/.test(chunk);
   }
