@@ -670,7 +670,13 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
   // Middleware Filter Grup, Topic & Otorisasi
   bot.use(async (ctx, next) => {
     if (ctx.chat?.type !== "private") {
-      if (!isGroupMessageAddressedToBot(ctx)) {
+      // Grup yang sudah dikunci ke satu Topic: bot standby di Topic itu, jadi
+      // teks biasa tanpa mention tetap dilayani. Di Topic lain tetap wajib mention.
+      const lockedTopic =
+        ctx.chat?.id !== undefined ? getEffectiveAllowedTopic(ctx.chat.id) : undefined;
+      const isInLockedTopic =
+        lockedTopic !== undefined && (getMessageTopicId(ctx) ?? 1) === lockedTopic;
+      if (!isGroupMessageAddressedToBot(ctx) && !isInLockedTopic) {
         return;
       }
 
@@ -911,8 +917,8 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       ...HUB_BOT_COMMANDS.map((item) => `• /<b>${item.command}</b> — ${escapeHtml(item.description)}`),
       "",
       "<b>Shortcut Eksekusi:</b>",
-      "• Kirim teks biasa atau <code>/chat &lt;pertanyaan&gt;</code> untuk analisis & aksi AI SRE",
-      "• Kirim <code>$ &lt;perintah&gt;</code> atau <code>/exec &lt;perintah&gt;</code> untuk shell langsung",
+      "• <code>/chat &lt;pertanyaan&gt;</code> untuk analisis & aksi AI (OpenCode)",
+      "• Teks biasa, <code>$ &lt;perintah&gt;</code>, atau <code>/exec &lt;perintah&gt;</code> untuk shell langsung (instan)",
       ...(config.botName ? [`• Mention <code>@${escapeHtml(config.botName)} &lt;pesan&gt;</code> di grup`] : []),
     ];
     await sendFormatted(ctx, lines.join("\n"), "html");
@@ -1726,8 +1732,10 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
     const current = await requireActiveNode(ctx);
     if (!current) return;
 
-    const isDirectShell = prompt.startsWith("$ ");
-    await executeOnNode(ctx, current, prompt, { rememberInHistory: !isDirectShell });
+    // OpenCode hanya dipakai lewat /chat. Teks biasa dieksekusi langsung sebagai
+    // shell agar bot tetap instan dan tidak menunggu model.
+    const command = prompt.startsWith("$ ") ? prompt : `$ ${prompt}`;
+    await executeOnNode(ctx, current, command);
   });
 
   bot.catch((err) => {
