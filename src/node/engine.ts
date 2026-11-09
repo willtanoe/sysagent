@@ -134,7 +134,6 @@ export class NodeEngine {
     return this.openCode;
   }
 
-  /** Test helper untuk menyuntikkan mock OpenAI client pada unit test. */
   setClientForTest(mockClient: unknown): void {
     this.openai = mockClient as OpenAI;
   }
@@ -186,7 +185,7 @@ export class NodeEngine {
       throw new Error(ABORTED);
     }
 
-    // 1. Built-in RPC Commands dari Hub
+    // Built-in RPC dari Hub
     if (trimmed === "__builtin:status") {
       const statusText = await buildNodeStatusText(this.executor, this.statusServices);
       const out = `\`\`\`text\n${statusText}\n\`\`\``;
@@ -266,7 +265,7 @@ export class NodeEngine {
       return out;
     }
 
-    // 2. Direct Ops Mode ($ <perintah>)
+    // Direct ops mode ($ <perintah>)
     if (trimmed.startsWith("$ ")) {
       const cmd = trimmed.slice(2).trim();
       onChunk(`[${this.nodeId}] ⚙️ \`${cmd}\`...\n`);
@@ -282,7 +281,7 @@ export class NodeEngine {
 
     const eccEnhancement = buildEccContextForPrompt(trimmed);
 
-    // 3. Engine OpenCode (Bundled / External `opencode serve`)
+    // Engine OpenCode (bundled atau `opencode serve` eksternal)
     if (this.engineMode === "opencode" && this.openCode) {
       const chatId = ctx?.chatId ?? 0;
       const userId = ctx?.userId;
@@ -363,7 +362,7 @@ export class NodeEngine {
       });
     }
 
-    // 4. Fallback ke Direct Shell jika mode local tapi tidak ada LLM key
+    // Fallback ke direct shell saat mode local tanpa LLM key
     if (!this.openai) {
       onChunk(`[${this.nodeId}] ⚙️ \`${trimmed}\`...\n`);
       const res = await this.executor.runCommand(trimmed, requestApproval, undefined, signal, {
@@ -376,7 +375,7 @@ export class NodeEngine {
       return `[${this.nodeId}]\n${out}`;
     }
 
-    // 5. AI SRE Agent Mode (Local OpenAI-compatible Endpoint)
+    // AI SRE agent mode (endpoint OpenAI-compatible lokal)
     const messages: OpenAI.ChatCompletionMessageParam[] = [
       {
         role: "system",
@@ -533,7 +532,7 @@ export class NodeEngine {
               targetNodeId = (parsed.node_id ?? "").trim();
               remoteCmd = (parsed.command ?? "").trim();
             } catch {
-              // invalid json
+              // payload bukan JSON valid, lewati
             }
 
             if (!targetNodeId || !remoteCmd) {

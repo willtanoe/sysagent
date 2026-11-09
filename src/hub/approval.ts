@@ -126,7 +126,7 @@ export class ApprovalBatcher {
     const cacheKey = this.getCacheKey(req.chatId, req.userId, req.command);
     const cached = this.decisionCache.get(cacheKey);
 
-    // 1. Cek riwayat keputusan terbaru untuk perintah identik (Auto-Decision Memory)
+    // Cek riwayat keputusan terbaru untuk perintah identik (auto-decision memory)
     if (cached && Date.now() < cached.expiresAt) {
       this.resolver(req.approvalId, cached.approved, req.chatId, req.userId);
       console.log(
@@ -138,7 +138,7 @@ export class ApprovalBatcher {
     const batchKey = this.getBatchKey(req.chatId, req.userId, req.command);
     let batch = this.activeBatches.get(batchKey);
 
-    // 2. Gabungkan ke batch aktif jika perintah identik sedang menunggu persetujuan
+    // Gabungkan ke batch aktif jika perintah identik sedang menunggu persetujuan
     if (batch && !batch.resolved) {
       batch.items.set(req.approvalId, {
         approvalId: req.approvalId,
@@ -157,7 +157,7 @@ export class ApprovalBatcher {
       return { batchId: batch.batchId, autoResolved: false };
     }
 
-    // 3. Buat batch baru jika belum ada
+    // Buat batch baru jika belum ada
     const batchId = "b_" + crypto.randomBytes(4).toString("hex");
     batch = {
       batchId,

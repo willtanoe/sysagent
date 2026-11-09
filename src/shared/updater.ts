@@ -64,7 +64,7 @@ export const defaultExecStep: ExecStepFn = (
       try {
         child.kill("SIGKILL");
       } catch {
-        // abaikan
+        // proses sudah berhenti
       }
     }, timeoutMs);
     timer.unref?.();
@@ -194,9 +194,8 @@ export async function checkAndApplyUpdate(opts?: {
       };
     }
 
-    // Local bisa lebih maju dari remote (mis. commit lokal belum di-push).
-    // `git pull --ff-only` menghasilkan "Already up to date" dan exit 0, yang
-    // sebelumnya dilaporkan sebagai update sukses + memicu restart sia-sia.
+    // Local bisa lebih maju dari remote; `git pull --ff-only` tetap exit 0
+    // dengan "Already up to date", jadi jangan dianggap update sukses.
     if (!switchedBranch && !opts?.forceBuild) {
       const anc = await execFn(
         `git merge-base --is-ancestor ${remoteCommit} ${info.commit}`,
@@ -313,7 +312,7 @@ export function scheduleSelfRestart(
     try {
       await onBeforeExit?.();
     } catch {
-      // abaikan
+      // kegagalan cleanup tidak boleh membatalkan restart
     }
 
     const child = spawn(process.execPath, process.argv.slice(1), {

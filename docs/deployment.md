@@ -156,10 +156,10 @@ Karena proses Node berjalan sebagai `root` (`uid=0`), `NodeExecutor` secara otom
 
 ### 4.1 Otomatis via Git Poller atau Perintah `/update` di Telegram
 Secara bawaan (`AUTO_UPDATE=true`), Hub dan seluruh Node otomatis mengecek commit baru di branch remote setiap 2 menit (`AUTO_UPDATE_INTERVAL_MS=120000`), atau dapat dipicu kapan saja lewat Telegram:
-- `/update` atau `/update all` — Menarik commit terbaru (`git pull --ff-only`), menjalankan `npm run build`, dan me-restart seluruh Node serta Hub.
-- `/update <node>` — Update & restart satu node tertentu.
-- `/update hub` — Update & restart Hub saja.
-- `/update status` — Mengecek branch & commit yang sedang berjalan di Hub dan seluruh Node.
+- `/update` atau `/update all`: menarik commit terbaru (`git pull --ff-only`), menjalankan `npm run build`, dan me-restart seluruh Node serta Hub.
+- `/update <node>`: update & restart satu node tertentu.
+- `/update hub`: update & restart Hub saja.
+- `/update status`: mengecek branch & commit yang sedang berjalan di Hub dan seluruh Node.
 
 ### 4.2 Penyesuaian `WorkingDirectory` Kustom pada Systemd
 Agar `git fetch`, `git pull`, dan `npm run build` tidak gagal karena error `Read-only file system`, pastikan unit `systemd` di `/etc/systemd/system/*.service` menempatkan working directory aplikasi di `ReadWritePaths` dan hanya mengunci file `.env` di `ReadOnlyPaths`:

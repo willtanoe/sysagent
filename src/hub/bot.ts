@@ -737,7 +737,6 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
       .catch(() => undefined);
   }
 
-  // Helper eksekusi prompt/command ke node tertentu
   async function executeOnNode(
     ctx: Context,
     nodeId: string,
@@ -862,17 +861,14 @@ export function createHubBot(config: BotConfig, hub: HubServer, store?: HubStore
 
   async function requireActiveNode(ctx: Context): Promise<string | null> {
     const current = hubStore.getActiveNode(scopeOf(ctx));
-    // Jika user sudah memilih node dan node tersebut masih online, gunakan node itu
     if (current && hub.getNode(current)) {
       return current;
     }
 
-    // Default otomatis: jika OpenCode Hub aktif, langsung gunakan hub tanpa tanya
     if (hub.getNode(hubNodeId)) {
       return hubNodeId;
     }
 
-    // Jika node embedded hub tidak aktif tapi ada node lain terhubung
     const nodes = hub.listNodes();
     if (nodes.length === 1 && nodes[0]) {
       return nodes[0].nodeId;

@@ -164,7 +164,7 @@ export class AuditLogger {
       try {
         fs.chmodSync(this.logPath, 0o600);
       } catch {
-        // abaikan
+        // filesystem tanpa dukungan chmod
       }
       // Teruskan entri yang sudah berhasil dipersist ke salinan off-node (bila diset).
       this.sink?.(entry);
@@ -182,7 +182,7 @@ export class AuditLogger {
       try {
         fs.chmodSync(this.logPath, 0o600);
       } catch {
-        // abaikan
+        // filesystem tanpa dukungan chmod
       }
       this.lastHash = entry.hash;
       return true;

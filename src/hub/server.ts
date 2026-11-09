@@ -385,7 +385,7 @@ export class HubServer extends EventEmitter {
                   try {
                     existing.ws.close();
                   } catch {
-                    // abaikan
+                    // socket lama sudah diganti koneksi baru
                   }
                 }
 
@@ -522,7 +522,7 @@ export class HubServer extends EventEmitter {
         try {
           node.ws.close();
         } catch {
-          // abaikan
+          // best-effort saat shutdown
         }
       }
       this.nodes.clear();
@@ -665,7 +665,7 @@ export class HubServer extends EventEmitter {
         try {
           node.ws.send(JSON.stringify(cancelMsg));
         } catch {
-          // abaikan
+          // node mungkin sudah terputus
         }
       }
 

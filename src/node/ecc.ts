@@ -182,7 +182,7 @@ export function listEccAgents(rootDir?: string): EccItemSummary[] {
         filePath: fullPath,
       });
     } catch {
-      // abaikan
+      // file tidak terbaca, lewati
     }
   }
   return results.sort((a, b) => a.name.localeCompare(b.name));
@@ -208,7 +208,7 @@ export function listEccCommands(rootDir?: string): EccItemSummary[] {
         filePath: fullPath,
       });
     } catch {
-      // abaikan
+      // file tidak terbaca, lewati
     }
   }
   return results.sort((a, b) => a.name.localeCompare(b.name));
@@ -275,7 +275,7 @@ export function buildEccContextForPrompt(prompt: string, rootDir?: string): EccP
   let matchedAgent: string | undefined;
   let matchedCommand: string | undefined;
 
-  // 1. Cek prefix eksplisit `ecc:<target> <argumen>` atau `/<command> <argumen>`
+  // Prefix eksplisit `ecc:<target> <argumen>` atau `/<command> <argumen>`
   const explicitMatch = trimmed.match(/^(?:ecc:|\/ecc\s+|\/)([a-z0-9_-]+)(?:\s+([\s\S]*))?$/i);
   if (explicitMatch) {
     const target = explicitMatch[1]!.toLowerCase();
@@ -304,7 +304,7 @@ export function buildEccContextForPrompt(prompt: string, rootDir?: string): EccP
     }
   }
 
-  // 2. Trigger-Table Lazy Loading (maksimal 2 skill spesifik agar hemat context window)
+  // Trigger-table lazy loading; maksimal 2 skill agar hemat context window
   for (const rule of TRIGGER_TABLE) {
     if (rule.pattern.test(trimmed)) {
       for (const sk of rule.skills) {
@@ -374,7 +374,7 @@ export function provisionOpenCodeEcc(configDir: string, rootDir?: string): strin
         configObj.provider = {};
       }
 
-      // 1. Pewarisan opsional dari global config host (~/.config/opencode/opencode.json)
+      // Pewarisan opsional dari global config host (~/.config/opencode/opencode.json)
       const homeDir = process.env.HOME || process.env.USERPROFILE || "";
       const globalConfigPath = homeDir ? path.join(homeDir, ".config", "opencode", "opencode.json") : "";
       if (globalConfigPath && fs.existsSync(globalConfigPath)) {
@@ -392,8 +392,8 @@ export function provisionOpenCodeEcc(configDir: string, rootDir?: string): strin
         }
       }
 
-      // 2. Pewarisan GENERIK langsung dari .env (GATEWAY_URL & GATEWAY_API_KEY / OPENCODE_GATEWAY_*)
-      //    Sehingga tidak bergantung pada file ~/.config/opencode/opencode.json maupun environment HOME systemd!
+      // Pewarisan generik dari .env (GATEWAY_URL & GATEWAY_API_KEY / OPENCODE_GATEWAY_*),
+      // tidak bergantung pada global config maupun environment HOME systemd.
       const gatewayUrl =
         process.env.OPENCODE_GATEWAY_URL ||
         process.env.GATEWAY_URL ||

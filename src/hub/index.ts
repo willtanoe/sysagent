@@ -60,9 +60,8 @@ installLogRedaction();
 process.on("unhandledRejection", (reason) => {
   console.error("[fatal] Unhandled promise rejection:", reason);
 });
-// Exception tak tertangani berarti state proses tidak lagi dapat dipercaya.
-// Dulu exception hanya di-log dan proses tetap "hidup" padahal bot berhenti
-// merespons. Sekarang keluar agar systemd (Restart=always) menghidupkan ulang.
+// Exception tak tertangani berarti state proses tidak lagi dipercaya; keluar
+// agar systemd (Restart=always) menyalakan ulang.
 process.on("uncaughtException", (err) => {
   console.error("[fatal] Uncaught exception:", err);
   setTimeout(() => process.exit(1), 250).unref?.();
@@ -271,12 +270,8 @@ async function main() {
       store
     );
 
-    // Lepas webhook (jika ada) SEBELUM long polling, dengan batas waktu singkat.
-    // Dulu panggilan ini (dan setMyCommands) di-await tanpa timeout sehingga saat
-    // jaringan ke Telegram lambat, bot baru mulai polling setelah 36-39 detik
-    // (insiden 09 Nov 10:40 & 13:14).
-    // Jangan buang pesan yang masuk saat bot restart. Dulu
-    // drop_pending_updates=true membuat pesan operator hilang tanpa jejak.
+    // Lepas webhook sebelum long polling dengan timeout singkat; tanpa itu,
+    // jaringan lambat menunda polling puluhan detik. Jangan buang pesan saat restart.
     const webhookCleanup = bot.api
       .deleteWebhook({ drop_pending_updates: false })
       .catch((err) => {
@@ -306,9 +301,8 @@ async function main() {
     const startBotRunner = (): void => {
       botRunnerStartedAt = Date.now();
       runner = run(bot, {
-        // Backoff eksponensial bawaan bisa membuat bot diam 2-5 menit saat
-        // Telegram membalas 502/504 (insiden 6 & 8 Nov). Interval tetap 2 detik
-        // membuat long polling pulih cepat tanpa membanjiri API.
+        // Backoff eksponensial bawaan bisa membuat bot diam 2-5 menit saat Telegram
+        // membalas 502/504; interval tetap 2 detik pulih cepat tanpa membanjiri API.
         runner: { maxRetryTime: 60 * 60 * 1000, retryInterval: 2_000 },
       });
       // `task()` reject jika runner berhenti karena error yang dianggap fatal
@@ -381,9 +375,8 @@ async function main() {
     startBotWatchdog();
     console.log(`[boot] Telegram Bot aktif dan siap melayani fleet.`);
 
-    // Registrasi metadata menu dijalankan di latar belakang. Sebelumnya
-    // panggilan ini di-await sebelum polling sehingga latensi Telegram menunda
-    // bot sampai puluhan detik. Kegagalannya tidak memengaruhi penerimaan pesan.
+    // Registrasi menu di latar belakang: di-await, latensi Telegram menunda
+    // polling. Kegagalannya tidak memengaruhi penerimaan pesan.
     void (async () => {
       await bot.api
         .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "all_private_chats" } })

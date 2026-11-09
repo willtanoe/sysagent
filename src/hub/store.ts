@@ -85,7 +85,7 @@ export class HubStore {
       try {
         fs.chmodSync(tmp, 0o600);
       } catch {
-        // abaikan
+        // filesystem tanpa dukungan chmod
       }
       fs.renameSync(tmp, this.filePath);
     } catch (err: any) {
