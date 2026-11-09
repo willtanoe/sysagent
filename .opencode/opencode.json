@@ -15,9 +15,6 @@
     "skills/strategic-compact/SKILL.md",
     "skills/coding-standards/SKILL.md"
   ],
-  "plugin": [
-    "./plugins"
-  ],
   "skills": {
     "paths": [
       "./skills",
@@ -33,7 +30,7 @@
         "edit": true,
         "bash": true,
         "read": true,
-        "changed-files": true
+        "changed_files": true
       }
     },
     "planner": {
