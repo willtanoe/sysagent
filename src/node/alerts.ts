@@ -164,21 +164,21 @@ export class NodeAlertMonitor {
       return Number.isFinite(val) ? val : null;
     };
 
-    const disk = await this.executor.execRaw("df -P / | awk 'NR==2 {gsub(/%/,\"\",$5); print $5}'", 10_000);
+    const disk = await this.executor.execInternal("df -P / | awk 'NR==2 {gsub(/%/,\"\",$5); print $5}'", 10_000);
     const diskPct = parseNum(disk.output);
     const diskDetail =
       diskPct !== null && diskPct >= this.config.diskPct
-        ? (await this.executor.execRaw("df -h /", 10_000)).output
+        ? (await this.executor.execInternal("df -h /", 10_000)).output
         : "";
 
-    const mem = await this.executor.execRaw("free | awk '/Mem:/{printf \"%.0f\", $3/$2*100}'", 10_000);
+    const mem = await this.executor.execInternal("free | awk '/Mem:/{printf \"%.0f\", $3/$2*100}'", 10_000);
     const memPct = parseNum(mem.output);
     const memDetail =
       memPct !== null && memPct >= this.config.memPct
-        ? (await this.executor.execRaw("free -h", 10_000)).output
+        ? (await this.executor.execInternal("free -h", 10_000)).output
         : "";
 
-    const failed = await this.executor.execRaw("systemctl --failed --no-legend --no-pager 2>/dev/null", 10_000);
+    const failed = await this.executor.execInternal("systemctl --failed --no-legend --no-pager 2>/dev/null", 10_000);
     const ignored = new Set(this.config.ignoreUnits);
     const lines = failed.output
       .split("\n")

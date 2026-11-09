@@ -124,8 +124,8 @@ export class NodeExecutor {
     return PACKAGE_COMMAND.test(command) ? this.packageTimeoutMs : this.shellTimeoutMs;
   }
 
-  /** Eksekusi shell mentah dengan process-group kill & sanitasi env (dipakai internal & oleh runCommand). */
-  execRaw(command: string, timeoutMs?: number, signal?: AbortSignal): Promise<ExecResult> {
+  /** Eksekusi shell mentah: process-group kill & sanitasi env. Hanya dipakai kelas ini. */
+  private exec(command: string, timeoutMs?: number, signal?: AbortSignal): Promise<ExecResult> {
     const effectiveTimeout = timeoutMs ?? this.timeoutFor(command);
     const prepared = this.prepareCommand(command);
 
@@ -247,6 +247,58 @@ export class NodeExecutor {
     });
   }
 
+  /**
+   * Eksekusi untuk perintah internal node (status, alert, probe) yang tidak
+   * berasal dari operator. Verdict `block` selalu ditolak, dan perintah
+   * non-read-only tetap dicatat ke audit dengan risk "internal" agar jalur ini
+   * tidak bisa dipakai untuk bypass persetujuan secara senyap.
+   *
+   * @internal Hanya untuk modul telemetri di dalam node ini.
+   */
+  async execInternal(
+    command: string,
+    timeoutMs?: number,
+    signal?: AbortSignal
+  ): Promise<ExecResult> {
+    const verdict: Verdict = assessRisk(command);
+
+    if (verdict.level === "block") {
+      this.audit.log({
+        nodeId: this.nodeId,
+        command,
+        exitCode: 126,
+        durationMs: 0,
+        risk: "block",
+        approved: false,
+        outputPreview: verdict.reason,
+      });
+      return {
+        output: `[BLOCKED] Perintah internal dilarang: ${verdict.reason}`,
+        exitCode: 126,
+        durationMs: 0,
+        blocked: true,
+        reason: verdict.reason,
+      };
+    }
+
+    const res = await this.exec(command, timeoutMs, signal);
+
+    if (verdict.level !== "allow") {
+      this.audit.log({
+        nodeId: this.nodeId,
+        command,
+        exitCode: res.exitCode,
+        durationMs: res.durationMs,
+        risk: "internal",
+        approved: true,
+        timedOut: res.timedOut,
+        outputPreview: res.output.slice(0, 200),
+      });
+    }
+
+    return res;
+  }
+
   async runCommand(
     command: string,
     requestApproval?: RequestApprovalFn,
@@ -327,7 +379,7 @@ export class NodeExecutor {
     }
     this.executionTimestamps.push(now);
 
-    const res = await this.execRaw(command, timeoutMs, signal);
+    const res = await this.exec(command, timeoutMs, signal);
 
     this.audit.log({
       nodeId: this.nodeId,

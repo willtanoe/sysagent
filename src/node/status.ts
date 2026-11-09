@@ -164,7 +164,7 @@ async function resolveStatusUnits(executor: NodeExecutor, configuredUnits?: stri
     .map((u) => (u.endsWith(".service") ? u : `${u}.service`))
     .filter((u) => UNIT_RE.test(u));
 
-  const listed = await executor.execRaw(
+  const listed = await executor.execInternal(
     "systemctl list-units --type=service --state=running,failed --no-pager --no-legend 2>/dev/null | awk '{if ($1 ~ /^[●*]/) print $2; else print $1}'",
     6_000
   );
@@ -183,7 +183,7 @@ async function collectServices(executor: NodeExecutor, configuredUnits?: string[
   const quotedUnits = units.map((u) => `'${u.replace(/'/g, "")}'`).join(" ");
   const command = `systemctl show --property=Id,ActiveState,SubState,MemoryCurrent,FragmentPath ${quotedUnits} 2>/dev/null`;
 
-  const result = await executor.execRaw(command, 10_000);
+  const result = await executor.execInternal(command, 10_000);
   const blocks = result.output.trim().split(/\n\s*\n/);
   const states: ServiceState[] = [];
 
@@ -215,7 +215,7 @@ async function collectServices(executor: NodeExecutor, configuredUnits?: string[
 }
 
 async function collectPm2(executor: NodeExecutor): Promise<ServiceState[]> {
-  const result = await executor.execRaw(
+  const result = await executor.execInternal(
     "command -v pm2 >/dev/null 2>&1 && pm2 jlist 2>/dev/null || true",
     6_000
   );
@@ -267,31 +267,31 @@ export async function buildNodeStatusText(
     services,
     pm2,
   ] = await Promise.all([
-    executor.execRaw("hostname", 5_000),
-    executor.execRaw("uname -r", 5_000),
-    executor.execRaw("uptime -p", 5_000),
-    executor.execRaw("cat /proc/loadavg", 5_000),
-    executor.execRaw("nproc", 5_000),
-    executor.execRaw(
+    executor.execInternal("hostname", 5_000),
+    executor.execInternal("uname -r", 5_000),
+    executor.execInternal("uptime -p", 5_000),
+    executor.execInternal("cat /proc/loadavg", 5_000),
+    executor.execInternal("nproc", 5_000),
+    executor.execInternal(
       "free -b | awk '/^Mem:/{print $2, $3, $4, $5, $6, $7} /^Swap:/{print $2, $3, $4}'",
       5_000
     ),
-    executor.execRaw("df -PB1 / | awk 'NR==2{print $2, $3, $5}'", 5_000),
-    executor.execRaw(
+    executor.execInternal("df -PB1 / | awk 'NR==2{print $2, $3, $5}'", 5_000),
+    executor.execInternal(
       "systemctl --failed --no-legend --no-pager 2>/dev/null | awk '{if ($1 ~ /^[●*]/) print $2; else print $1}'",
       5_000
     ),
-    executor.execRaw(
+    executor.execInternal(
       "ps -eo pcpu=,comm= --sort=-pcpu | awk '$2 !~ /^(ps|ss|awk|sed|bash|sh|cat|wc|head|tail|sort|nproc|df|free|uname|hostname|uptime|systemctl|command)$/ {print; n++; if (n==3) exit}'",
       5_000
     ),
-    executor.execRaw(
+    executor.execInternal(
       "ps -eo rss=,comm= --sort=-rss | awk '$2 !~ /^(ps|ss|awk|sed|bash|sh|cat|wc|head|tail|sort|nproc|df|free|uname|hostname|uptime|systemctl|command)$/ {print; n++; if (n==5) exit}'",
       5_000
     ),
-    executor.execRaw("ss -ltn 2>/dev/null | tail -n +2 | wc -l", 5_000),
-    executor.execRaw("ps -e --no-headers | wc -l", 5_000),
-    executor.execRaw(
+    executor.execInternal("ss -ltn 2>/dev/null | tail -n +2 | wc -l", 5_000),
+    executor.execInternal("ps -e --no-headers | wc -l", 5_000),
+    executor.execInternal(
       "awk 'NR>2 {gsub(/:/,\"\",$1); if ($1 != \"lo\") {rx+=$2; tx+=$10}} END {print rx+0, tx+0}' /proc/net/dev",
       5_000
     ),
