@@ -14,6 +14,32 @@ import { isManagedOpenCode, ManagedOpenCodeServer } from "../node/opencode-serve
 
 dotenv.config();
 
+const BOT_RESTART_BASE_MS = 2_000;
+const BOT_RESTART_MAX_MS = 60_000;
+
+function telegramErrorCode(err: unknown): number | undefined {
+  if (typeof err !== "object" || err === null) return undefined;
+  const code = (err as { error_code?: unknown }).error_code;
+  return typeof code === "number" ? code : undefined;
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "object" && err !== null && "message" in err) {
+    return String((err as { message: unknown }).message);
+  }
+  return String(err);
+}
+
+// Jangan biarkan rejection/exception transien (mis. Telegram 409/ECONNRESET)
+// mematikan seluruh Hub. systemd tetap menjadi supervisor terakhir.
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal] Unhandled promise rejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[fatal] Uncaught exception:", err);
+});
+
 function listIds(raw: string | undefined): number[] {
   return (raw || "")
     .split(",")
@@ -217,7 +243,64 @@ async function main() {
     }
     await bot.api.deleteWebhook({ drop_pending_updates: true }).catch(() => undefined);
 
-    const runner = run(bot);
+    let stopping = false;
+    let botRunnerRestarts = 0;
+    let botRunnerStartedAt = Date.now();
+    let botRunnerRestartTimer: NodeJS.Timeout | null = null;
+    let runner: ReturnType<typeof run>;
+
+    const startBotRunner = (): void => {
+      botRunnerStartedAt = Date.now();
+      runner = run(bot, {
+        runner: { maxRetryTime: 60 * 60 * 1000, retryInterval: "exponential" },
+      });
+      // `task()` reject jika runner berhenti karena error yang dianggap fatal
+      // oleh grammY (mis. 409 Conflict). Tanpa handler ini, proses ikut mati.
+      void (runner.task() ?? Promise.resolve()).catch((err: unknown) => {
+        void handleBotRunnerCrash(err);
+      });
+    };
+
+    const handleBotRunnerCrash = async (err: unknown): Promise<void> => {
+      if (stopping) return;
+      const code = telegramErrorCode(err);
+      // Runner yang sempat stabil >60 detik dianggap sehat: reset backoff.
+      if (Date.now() - botRunnerStartedAt > 60_000) botRunnerRestarts = 0;
+      botRunnerRestarts += 1;
+      const delay = Math.min(
+        BOT_RESTART_MAX_MS,
+        BOT_RESTART_BASE_MS * 2 ** Math.min(botRunnerRestarts - 1, 5)
+      );
+      console.error(
+        `[bot] Runner berhenti (${code ? `error_code=${code}` : describeError(err)}); ` +
+          `restart dalam ${Math.round(delay / 1000)}s.`
+      );
+      if (botRunnerRestartTimer) clearTimeout(botRunnerRestartTimer);
+      botRunnerRestartTimer = setTimeout(() => {
+        botRunnerRestartTimer = null;
+        if (stopping) return;
+        void (async () => {
+          try {
+            if (code === 409) {
+              // 409 = masih ada long-poll lain (instance lama/duplikat).
+              // Lepaskan dulu sebelum memulai polling baru.
+              await bot.api.deleteWebhook({ drop_pending_updates: false }).catch(() => undefined);
+            }
+            startBotRunner();
+            console.log("[bot] Runner Telegram dijalankan ulang.");
+          } catch (restartErr) {
+            void handleBotRunnerCrash(restartErr);
+          }
+        })();
+      }, delay);
+      botRunnerRestartTimer.unref?.();
+    };
+
+    bot.catch((err) => {
+      console.error("[bot] Error saat menangani update:", err.error ?? err);
+    });
+
+    startBotRunner();
     console.log(`[boot] Telegram Bot aktif dan siap melayani fleet.`);
 
     let autoUpdater: AutoUpdateMonitor | null = null;
@@ -254,10 +337,13 @@ async function main() {
       autoUpdater.start();
     }
 
-    let stopping = false;
     const shutdown = async (sig: string) => {
       if (stopping) return;
       stopping = true;
+      if (botRunnerRestartTimer) {
+        clearTimeout(botRunnerRestartTimer);
+        botRunnerRestartTimer = null;
+      }
       console.log(`\n[stop] Signal ${sig} diterima, mematikan Aster Hub...`);
       autoUpdater?.stop();
       store.flush();
