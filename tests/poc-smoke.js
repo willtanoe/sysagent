@@ -580,6 +580,8 @@ async function runTests() {
       if (cmd.startsWith("git rev-parse origin/")) {
         return { exitCode: 0, output: "9999999888888877777776666666555555544444" };
       }
+      // Remote (9999…) bukan ancestor dari local (1111…) → memang ada update.
+      if (cmd.startsWith("git merge-base --is-ancestor")) return { exitCode: 1, output: "" };
       if (cmd.startsWith("git diff --name-only")) return { exitCode: 0, output: "src/node/status.ts" };
       if (cmd.startsWith("git log --oneline")) return { exitCode: 0, output: "9999999 feat: new update" };
       if (cmd.startsWith("git pull")) return { exitCode: 0, output: "Fast-forward" };

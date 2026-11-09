@@ -194,6 +194,26 @@ export async function checkAndApplyUpdate(opts?: {
       };
     }
 
+    // Local bisa lebih maju dari remote (mis. commit lokal belum di-push).
+    // `git pull --ff-only` menghasilkan "Already up to date" dan exit 0, yang
+    // sebelumnya dilaporkan sebagai update sukses + memicu restart sia-sia.
+    if (!switchedBranch && !opts?.forceBuild) {
+      const anc = await execFn(
+        `git merge-base --is-ancestor ${remoteCommit} ${info.commit}`,
+        dir,
+        10_000
+      );
+      if (anc.exitCode === 0) {
+        return {
+          status: "up_to_date",
+          branch,
+          fromCommit: info.shortCommit,
+          toCommit: remoteShort,
+          restartRequired: false,
+        };
+      }
+    }
+
     const diffFilesRes = await execFn(
       `git diff --name-only ${info.commit}..${remoteCommit} 2>/dev/null || true`,
       dir,
