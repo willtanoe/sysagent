@@ -2,6 +2,7 @@ import * as dotenv from "dotenv";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { format as formatUtil } from "util";
 import { run } from "@grammyjs/runner";
 import { HubServer, parseNodeTokens } from "./server";
 import { createHubBot, HUB_BOT_COMMANDS, parseAllowedTopics } from "./bot";
@@ -32,13 +33,39 @@ function describeError(err: unknown): string {
   return String(err);
 }
 
-// Jangan biarkan rejection/exception transien (mis. Telegram 409/ECONNRESET)
-// mematikan seluruh Hub. systemd tetap menjadi supervisor terakhir.
+/**
+ * Jangan pernah menulis token bot ke journal: grammY/node-fetch mencetak URL
+ * lengkap `https://api.telegram.org/bot<id>:<token>/...` pada error jaringan.
+ * Filter ini mengganti token menjadi `bot<redacted>` dari semua output console.
+ */
+function installLogRedaction(): void {
+  const BOT_TOKEN_RE = /bot\d+:[A-Za-z0-9_-]+/g;
+  const wrap = (original: (...args: unknown[]) => void) => {
+    return (...args: unknown[]): void => {
+      try {
+        original(formatUtil(...args).replace(BOT_TOKEN_RE, "bot<redacted>"));
+      } catch {
+        // jika format gagal, teruskan apa adanya agar log tidak hilang
+        original(...args);
+      }
+    };
+  };
+  console.log = wrap(console.log.bind(console));
+  console.warn = wrap(console.warn.bind(console));
+  console.error = wrap(console.error.bind(console));
+}
+installLogRedaction();
+
+// Rejection transien (mis. Telegram 409/ECONNRESET) tidak boleh mematikan Hub.
 process.on("unhandledRejection", (reason) => {
   console.error("[fatal] Unhandled promise rejection:", reason);
 });
+// Exception tak tertangani berarti state proses tidak lagi dapat dipercaya.
+// Dulu exception hanya di-log dan proses tetap "hidup" padahal bot berhenti
+// merespons. Sekarang keluar agar systemd (Restart=always) menghidupkan ulang.
 process.on("uncaughtException", (err) => {
   console.error("[fatal] Uncaught exception:", err);
+  setTimeout(() => process.exit(1), 250).unref?.();
 });
 
 function listIds(raw: string | undefined): number[] {
@@ -244,38 +271,71 @@ async function main() {
       store
     );
 
-    await bot.api
-      .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "all_private_chats" } })
+    // Lepas webhook (jika ada) SEBELUM long polling, dengan batas waktu singkat.
+    // Dulu panggilan ini (dan setMyCommands) di-await tanpa timeout sehingga saat
+    // jaringan ke Telegram lambat, bot baru mulai polling setelah 36-39 detik
+    // (insiden 09 Nov 10:40 & 13:14).
+    // Jangan buang pesan yang masuk saat bot restart. Dulu
+    // drop_pending_updates=true membuat pesan operator hilang tanpa jejak.
+    const webhookCleanup = bot.api
+      .deleteWebhook({ drop_pending_updates: false })
       .catch((err) => {
-        console.warn("[boot] Gagal mendaftarkan daftar command Telegram (private):", err.message);
+        console.warn(
+          "[boot] Gagal melepas webhook Telegram (runner akan mencoba ulang):",
+          describeError(err)
+        );
       });
-
-    if (!botGroupCommands || store.hasAnyHiddenGroupMenu()) {
-      await bot.api.deleteMyCommands({ scope: { type: "default" } }).catch(() => undefined);
-      await bot.api.deleteMyCommands({ scope: { type: "all_group_chats" } }).catch(() => undefined);
-    } else {
-      await bot.api.setMyCommands(HUB_BOT_COMMANDS).catch((err) => {
-        console.warn("[boot] Gagal mendaftarkan daftar command Telegram:", err.message);
+    // Batasi tunggu 10 detik; jika Telegram lambat, polling tetap dimulai dan
+    // runner akan menangani kemungkinan 409 lewat jalur restart di bawah.
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, 10_000);
+      timer.unref?.();
+      void webhookCleanup.finally(() => {
+        clearTimeout(timer);
+        resolve();
       });
-    }
-    await bot.api.deleteWebhook({ drop_pending_updates: true }).catch(() => undefined);
+    });
 
     let stopping = false;
     let botRunnerRestarts = 0;
     let botRunnerStartedAt = Date.now();
     let botRunnerRestartTimer: NodeJS.Timeout | null = null;
+    let botWatchdogTimer: NodeJS.Timeout | null = null;
     let runner: ReturnType<typeof run>;
 
     const startBotRunner = (): void => {
       botRunnerStartedAt = Date.now();
       runner = run(bot, {
-        runner: { maxRetryTime: 60 * 60 * 1000, retryInterval: "exponential" },
+        // Backoff eksponensial bawaan bisa membuat bot diam 2-5 menit saat
+        // Telegram membalas 502/504 (insiden 6 & 8 Nov). Interval tetap 2 detik
+        // membuat long polling pulih cepat tanpa membanjiri API.
+        runner: { maxRetryTime: 60 * 60 * 1000, retryInterval: 2_000 },
       });
       // `task()` reject jika runner berhenti karena error yang dianggap fatal
       // oleh grammY (mis. 409 Conflict). Tanpa handler ini, proses ikut mati.
       void (runner.task() ?? Promise.resolve()).catch((err: unknown) => {
         void handleBotRunnerCrash(err);
       });
+    };
+
+    // Watchdog: runner bisa berhenti tanpa rejection (mis. source ditutup).
+    // Tanpa ini proses tetap "active" di systemd tetapi bot tidak merespons.
+    const startBotWatchdog = (): void => {
+      if (botWatchdogTimer) return;
+      botWatchdogTimer = setInterval(() => {
+        if (stopping || botRunnerRestartTimer) return;
+        let alive = false;
+        try {
+          alive = runner.isRunning();
+        } catch {
+          alive = false;
+        }
+        if (!alive) {
+          console.error("[bot] Watchdog: runner Telegram tidak aktif, memulai ulang.");
+          void handleBotRunnerCrash(new Error("runner tidak aktif (watchdog)"));
+        }
+      }, 15_000);
+      botWatchdogTimer.unref?.();
     };
 
     const handleBotRunnerCrash = async (err: unknown): Promise<void> => {
@@ -318,7 +378,28 @@ async function main() {
     });
 
     startBotRunner();
+    startBotWatchdog();
     console.log(`[boot] Telegram Bot aktif dan siap melayani fleet.`);
+
+    // Registrasi metadata menu dijalankan di latar belakang. Sebelumnya
+    // panggilan ini di-await sebelum polling sehingga latensi Telegram menunda
+    // bot sampai puluhan detik. Kegagalannya tidak memengaruhi penerimaan pesan.
+    void (async () => {
+      await bot.api
+        .setMyCommands(HUB_BOT_COMMANDS, { scope: { type: "all_private_chats" } })
+        .catch((err) => {
+          console.warn("[boot] Gagal mendaftarkan daftar command Telegram (private):", err.message);
+        });
+
+      if (!botGroupCommands || store.hasAnyHiddenGroupMenu()) {
+        await bot.api.deleteMyCommands({ scope: { type: "default" } }).catch(() => undefined);
+        await bot.api.deleteMyCommands({ scope: { type: "all_group_chats" } }).catch(() => undefined);
+      } else {
+        await bot.api.setMyCommands(HUB_BOT_COMMANDS).catch((err) => {
+          console.warn("[boot] Gagal mendaftarkan daftar command Telegram:", err.message);
+        });
+      }
+    })();
 
     let autoUpdater: AutoUpdateMonitor | null = null;
     if (process.env.AUTO_UPDATE !== "false") {
@@ -360,6 +441,10 @@ async function main() {
       if (botRunnerRestartTimer) {
         clearTimeout(botRunnerRestartTimer);
         botRunnerRestartTimer = null;
+      }
+      if (botWatchdogTimer) {
+        clearInterval(botWatchdogTimer);
+        botWatchdogTimer = null;
       }
       console.log(`\n[stop] Signal ${sig} diterima, mematikan Aster Hub...`);
       autoUpdater?.stop();
