@@ -30,7 +30,7 @@ export function isSecretAccess(raw: string): boolean {
   const cmd = raw.replace(/["'\\{}]/g, "");
 
   const SECRET =
-    /(?:^|[\s/])\.(?:env|en\?|en\*)(?!\.example\b)|(?:\/etc\/(?:g?shad(?:ow|[\w?*]*)|sudoers(?:\.d)?\b|ssl\/private\b|letsencrypt\/live\b|wireguard\b|openvpn\b|ipsec\.secrets\b|ppp\/[^\s]*secrets|kubernetes\/[^\s]*\.conf|rancher\/k3s\/k3s\.yaml))|id_(?:rsa|ed25519|ecdsa|dsa)\b|privkey[^\s]*\.pem\b|\.ssh\/|\.kube\/config\b|\.docker\/config\.json\b|\.config\/aster|askpass(?:[-_A-Za-z0-9.]*\.sh)?|hub-state\.json|wp-config(?:\.php)?|\.aws\/(?:credentials|config)|\.git-credentials|\.netrc|\.my\.cnf|\.pgpass|\/proc\/(?:[^\s]*\/)?envi[^\s]*/i;
+    /(?:^|[\s/])\.(?:env|en\?|en\*)(?!\.example\b)|(?:\/etc\/(?:g?shad(?:ow|[\w?*]*)|sudoers(?:\.d)?\b|ssl\/private\b|letsencrypt\/live\b|wireguard\b|openvpn\b|ipsec\.secrets\b|ppp\/[^\s]*secrets|kubernetes\/[^\s]*\.conf|rancher\/k3s\/k3s\.yaml))|id_(?:rsa|ed25519|ecdsa|dsa)\b|privkey[^\s]*\.pem\b|\.ssh\/|\.kube\/config\b|\.docker\/config\.json\b|\.config\/aster|askpass(?:[-_A-Za-z0-9.]*\.sh)?|hub-state\.json|loopback-cookie(?:[-_A-Za-z0-9.]*)|wp-config(?:\.php)?|\.aws\/(?:credentials|config)|\.git-credentials|\.netrc|\.my\.cnf|\.pgpass|\/proc\/(?:[^\s]*\/)?envi[^\s]*/i;
 
   return SECRET.test(cmd);
 }

@@ -48,7 +48,7 @@ function singleQuote(value: string): string {
 export function sanitizeEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const result: NodeJS.ProcessEnv = { ...source };
   const sensitive =
-    /(TOKEN|PASSWORD|PASSWD|SECRET|API|KEY|PRIVATE|CREDENTIAL|AUTH|JWT|DSN|DATABASE_URL|ASKPASS)/i;
+    /(TOKEN|PASSWORD|PASSWD|SECRET|API|KEY|PRIVATE|CREDENTIAL|AUTH|JWT|DSN|DATABASE_URL|ASKPASS|COOKIE)/i;
   for (const key of Object.keys(result)) {
     if (key === "SUDO_ASKPASS") continue;
     if (sensitive.test(key)) delete result[key];

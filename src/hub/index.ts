@@ -1,4 +1,5 @@
 import * as dotenv from "dotenv";
+import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { run } from "@grammyjs/runner";
@@ -116,6 +117,9 @@ async function main() {
 
   let hubManagedOpenCode: ManagedOpenCodeServer | null = null;
   let hubNodeClient: NodeClient | null = null;
+  // Cookie loopback tidak pernah diletakkan di environment agen. Agen hanya
+  // menerima path file 0600 yang dibaca oleh fleet-ctl saat benar-benar dipakai.
+  let loopbackCookieFile: string | null = null;
 
   if (embedHubNode) {
     const hubEngineMode =
@@ -127,6 +131,11 @@ async function main() {
       process.env.HUB_AUDIT_PATH || path.join(stateDir, `audit-${hubNodeId}.jsonl`);
     const fleetCtlPath = path.resolve(__dirname, "fleet-ctl.js");
     const loopback = hub.getLoopbackConfig();
+
+    fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+    loopbackCookieFile = path.join(stateDir, `loopback-cookie-${hubNodeId}`);
+    fs.writeFileSync(loopbackCookieFile, loopback.cookie, { mode: 0o600 });
+    fs.chmodSync(loopbackCookieFile, 0o600);
 
     const hubExecutor = new NodeExecutor(hubNodeId, hubAuditPath, {
       sudoPassword: process.env.SUDO_PASSWORD,
@@ -169,7 +178,7 @@ async function main() {
           dataDir: process.env.HUB_OPENCODE_DATA_DIR || process.env.OPENCODE_DATA_DIR || defaultDataDir,
           extraEnv: {
             ASTER_HUB_LOOPBACK_URL: loopback.url,
-            ASTER_HUB_LOOPBACK_COOKIE: loopback.cookie,
+            ASTER_HUB_LOOPBACK_COOKIE_FILE: loopbackCookieFile,
           },
         });
         const { url, password } = await hubManagedOpenCode.start();
@@ -200,6 +209,14 @@ async function main() {
     if (hubManagedOpenCode) {
       await hubManagedOpenCode.stop();
       hubManagedOpenCode = null;
+    }
+    if (loopbackCookieFile !== null) {
+      try {
+        fs.rmSync(loopbackCookieFile, { force: true });
+      } catch {
+        // abaikan: file mungkin sudah tidak ada
+      }
+      loopbackCookieFile = null;
     }
   };
 

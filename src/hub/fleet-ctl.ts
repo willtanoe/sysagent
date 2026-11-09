@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import * as fs from "fs";
 import * as https from "https";
 import * as http from "http";
 
@@ -93,12 +94,35 @@ function requestLoopback(
   });
 }
 
+/**
+ * Cookie loopback dibaca dari file 0600 (ASTER_HUB_LOOPBACK_COOKIE_FILE) agar
+ * tidak pernah masuk ke environment proses agen. Variabel lama tetap didukung
+ * untuk kompatibilitas deployment.
+ */
+function resolveLoopbackCookie(): string {
+  const cookieFile = process.env.ASTER_HUB_LOOPBACK_COOKIE_FILE;
+  if (cookieFile) {
+    try {
+      const value = fs.readFileSync(cookieFile, "utf8").trim();
+      if (value !== "") return value;
+    } catch (err) {
+      console.error(
+        `ERROR: gagal membaca ASTER_HUB_LOOPBACK_COOKIE_FILE (${cookieFile}):`,
+        err instanceof Error ? err.message : String(err)
+      );
+    }
+  }
+  return (process.env.ASTER_HUB_LOOPBACK_COOKIE || "").trim();
+}
+
 async function main() {
   const baseUrl = process.env.ASTER_HUB_LOOPBACK_URL || "http://127.0.0.1:8765";
-  const cookie = process.env.ASTER_HUB_LOOPBACK_COOKIE || "";
+  const cookie = resolveLoopbackCookie();
 
   if (!cookie) {
-    console.error("ERROR: ASTER_HUB_LOOPBACK_COOKIE tidak tersedia di environment.");
+    console.error(
+      "ERROR: cookie loopback tidak tersedia (ASTER_HUB_LOOPBACK_COOKIE_FILE / ASTER_HUB_LOOPBACK_COOKIE)."
+    );
     process.exit(1);
   }
 
