@@ -9,6 +9,9 @@ WorkingDirectory=/opt/aster-fleet
 EnvironmentFile=/opt/aster-fleet/.env
 Environment=PATH=/usr/local/bin:/usr/bin:/bin
 Environment=HUB_STATE_FILE=/var/lib/aster-hub/hub-state.json
+# ProtectSystem=strict membuat $HOME read-only; arahkan cache npm ke StateDirectory
+# agar `npm ci` pada /update tetap bisa menulis.
+Environment=NPM_CONFIG_CACHE=/var/lib/aster-hub/.npm
 ExecStart=/usr/bin/env node /opt/aster-fleet/dist/hub/index.js
 Restart=always
 RestartSec=5
@@ -23,6 +26,12 @@ StateDirectoryMode=0700
 ReadWritePaths=/var/lib/aster-hub /opt/aster-fleet
 ReadOnlyPaths=-/opt/aster-fleet/.env
 NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
 RestrictRealtime=yes
 LockPersonality=yes
 SystemCallArchitectures=native
